@@ -60,7 +60,7 @@ final class BlueMapBackend implements MapBackend {
             } catch (RuntimeException | LinkageError e) {
                 // BlueMap の版によっては取れない
             }
-            if (plugin.registerWorld(world, save) == null) continue;
+            plugin.registerWorld(world, save);
             maps.put(world.getName(), new ArrayList<>(bw.getMaps()));
         }
         refresh();

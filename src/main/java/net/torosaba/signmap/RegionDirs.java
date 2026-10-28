@@ -27,7 +27,7 @@ final class RegionDirs {
             final Path found = fromBase(base, world);
             if (found != null) return found;
         }
-        log.warning("Tried: " + bases);
+        log.fine("Tried: " + bases);
         return null;
     }
 

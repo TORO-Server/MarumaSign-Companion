@@ -100,7 +100,9 @@ final class DynmapBackend implements MapBackend {
         plugin.getLogger().info("Dynmap " + api.getDynmapCoreVersion() + " enabled; worlds: " + targets);
         for (String name : targets) {
             final World world = Bukkit.getWorld(name);
-            if (world != null && plugin.registerWorld(world, null) != null) worldNames.add(name);
+            if (world == null) continue;
+            plugin.registerWorld(world, null);
+            worldNames.add(name);
         }
         refresh();
         plugin.requestScan();

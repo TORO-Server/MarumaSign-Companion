@@ -70,3 +70,19 @@ gradle test -Dsignmap.sampleRegions=<region ファイルのフォルダ>
 - このプラグインのコードは私的な利用のためのもので、公開しません。
 - MarumaSign (MIT) の看板の形式と URL の確認規則を参考に、同じ判定を自前で書いています (コードの引用はありません)。
 - `paper-api` と `bluemap-api` (MIT) と `gson` (Apache-2.0) はビルド時の参照だけで、JAR に含めません (サーバーが持っているものを使います)。
+
+## BlueMap の本番用設定
+
+`deploy/bluemap/` に、ローカルの Paper 26.3 + BlueMap 5.29 で動作確認した設定があります (overworld の 1 地図、Web ポート 8100、
+描画スレッド 2、`Referrer-Policy: no-referrer` ヘッダー付き)。`plugins/BlueMap/` に置きます (`maps/` には `overworld.conf` だけを置く)。
+
+- BlueMap は `maps/` が空だと全ワールドの地図設定を自動で作ってしまうので、`overworld.conf` だけを置いてから起動します。
+- 地図のデータ量は region ファイルのおよそ 2 倍、描画は 1 region あたり数十秒のスレッド時間 (ローカルでの目安) です。巨大なワールドでは、
+  描画マスク (`render-mask`) や `min-inhabited-time` で範囲を絞ることを検討してください。
+
+## ローカルでの動作確認
+
+`localtest/` (git 管理外) に Paper 26.3、BlueMap、Dynmap、このプラグインを入れて、本番の region ファイルの一部と、合成した看板
+(拒否すべき URL、XSS の文字列、8 行の看板など) で確認しています。ゲーム中の編集は `SignChangeEvent` / `BlockBreakEvent` を
+発火する検証用プラグインで確認しました (ソースは `localtest/testplugin`、リポジトリには含めません)。
+計測用の `ScanBench` (テストのソース) で、region ファイルの走査時間とメモリを測れます。

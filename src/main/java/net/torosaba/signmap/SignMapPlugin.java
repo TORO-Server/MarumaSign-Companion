@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -32,7 +33,11 @@ public final class SignMapPlugin extends JavaPlugin {
     private volatile MarkerHtml markerHtml = new MarkerHtml(new UrlFilter(List.of()), settings);
 
     private final Map<String, WorldState> worlds = new ConcurrentHashMap<>();
+    // region ディレクトリがまだなかったワールド (できたばかりのネザーなど)。走査のたびにもう一度探す
+    private final Map<String, Path> pendingWorlds = new ConcurrentHashMap<>();
     private final List<MapBackend> backends = new CopyOnWriteArrayList<>();
+    // ゲーム中の変更を地図に反映する専用のスレッド (長い走査や、地図側の重い更新でメインスレッドを待たせない)
+    private volatile ExecutorService liveExecutor;
     private volatile ScheduledExecutorService scheduler;
     private final AtomicBoolean scanning = new AtomicBoolean();
     private final AtomicBoolean scanRequested = new AtomicBoolean();
@@ -57,6 +62,11 @@ public final class SignMapPlugin extends JavaPlugin {
         loadSettings();
         shuttingDown = false;
         getServer().getPluginManager().registerEvents(new SignListener(this), this);
+        liveExecutor = Executors.newSingleThreadExecutor(r -> {
+            final Thread t = new Thread(r, "BlueMapMarumaSign-live");
+            t.setDaemon(true);
+            return t;
+        });
         scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             final Thread t = new Thread(r, "BlueMapMarumaSign-main");
             t.setDaemon(true);
@@ -108,6 +118,8 @@ public final class SignMapPlugin extends JavaPlugin {
         backends.clear();
         final ScheduledExecutorService s = scheduler;
         if (s != null) s.shutdownNow();
+        final ExecutorService live = liveExecutor;
+        if (live != null) live.shutdownNow();
         for (WorldState w : worlds.values()) saveCache(w);
         worlds.clear();
     }
@@ -181,9 +193,12 @@ public final class SignMapPlugin extends JavaPlugin {
         final ConfigurationSection overrides = getConfig().getConfigurationSection("regions");
         final Path regionDir = RegionDirs.resolve(world, extraBase, overrides == null ? null : overrides.getString(world.getName()), getLogger());
         if (regionDir == null) {
-            getLogger().warning("No region directory found for world '" + world.getName() + "'; skipped");
+            if (pendingWorlds.put(world.getName(), extraBase == null ? Path.of("") : extraBase) == null) {
+                getLogger().info("[" + world.getName() + "] No region directory yet; will look again at the next scan");
+            }
             return null;
         }
+        pendingWorlds.remove(world.getName());
         final Path cache = getDataFolder().toPath().resolve("cache").resolve(safeName(world.getName()) + ".json");
         final WorldState state = new WorldState(world.getName(), regionDir, cache);
         try {
@@ -222,6 +237,7 @@ public final class SignMapPlugin extends JavaPlugin {
         if (shuttingDown || !scanning.compareAndSet(false, true)) return;
         try {
             while (scanRequested.getAndSet(false)) {
+                retryPendingWorlds();
                 for (WorldState w : new ArrayList<>(worlds.values())) {
                     if (shuttingDown) return;
                     try {
@@ -246,6 +262,18 @@ public final class SignMapPlugin extends JavaPlugin {
             }
         } finally {
             scanning.set(false);
+        }
+    }
+
+    private void retryPendingWorlds() {
+        for (Map.Entry<String, Path> e : new ArrayList<>(pendingWorlds.entrySet())) {
+            final World world = Bukkit.getWorld(e.getKey());
+            if (world == null) {
+                pendingWorlds.remove(e.getKey());
+                continue;
+            }
+            final Path base = e.getValue().toString().isEmpty() ? null : e.getValue();
+            if (registerWorld(world, base) != null) refreshMarkers();
         }
     }
 
@@ -300,14 +328,36 @@ public final class SignMapPlugin extends JavaPlugin {
         final SignRecord record = new SignRecord(x, y, z, spec.url());
         w.store.liveSet(record);
         final MarkerHtml.View view = markerHtml.classify(record);
-        for (MapBackend b : backends) b.signUpdated(world.getName(), record, view);
+        final String worldName = world.getName();
+        runLive(() -> {
+            for (MapBackend b : backends) b.signUpdated(worldName, record, view);
+        });
     }
 
     void signRemoved(World world, int x, int y, int z) {
         final WorldState w = worlds.get(world.getName());
         if (w == null) return;
         if (!w.store.liveRemove(x, y, z)) return;
-        for (MapBackend b : backends) b.signRemoved(world.getName(), x, y, z);
+        final String worldName = world.getName();
+        runLive(() -> {
+            for (MapBackend b : backends) b.signRemoved(worldName, x, y, z);
+        });
+    }
+
+    private void runLive(Runnable task) {
+        final ExecutorService live = liveExecutor;
+        if (live == null) return;
+        try {
+            live.execute(() -> {
+                try {
+                    task.run();
+                } catch (RuntimeException e) {
+                    getLogger().warning("Marker update failed: " + e);
+                }
+            });
+        } catch (RuntimeException e) {
+            // 止まっている途中
+        }
     }
 
     boolean tracks(World world) {
