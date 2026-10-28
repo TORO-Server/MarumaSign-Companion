@@ -1,0 +1,15 @@
+name: BlueMapMarumaSign
+version: '${version}'
+main: net.torosaba.signmap.SignMapPlugin
+api-version: '1.21'
+description: Shows MarumaSign signs as BlueMap markers
+depend: [BlueMap]
+commands:
+  marumasignmap:
+    description: Status, rescan and reload for the MarumaSign BlueMap markers
+    usage: /marumasignmap [status|rescan|reload]
+    permission: bluemapmarumasign.admin
+permissions:
+  bluemapmarumasign.admin:
+    description: Use /marumasignmap
+    default: op

@@ -1,0 +1,112 @@
+# BlueMapMarumaSign の設定
+# MarumaSign 形式の看板 (URL|X|Y|Z|横幅|高さ|Z回転|Y回転|X回転) を BlueMap のマーカーとして出します。
+
+# 1 つの地図に出すマーカーの最大数 (超えた分は出しません)
+max-markers: 5000
+
+# マーカーにする URL の拡張子。ここにない拡張子の URL は出しません。
+allowed-extensions:
+  - png
+  - apng
+  - gif
+  - jpg
+  - jpeg
+  - bmp
+  - webp
+  - tif
+  - tiff
+  - svg
+  - svgz
+  - ico
+  - cur
+  - ani
+  - icns
+  - psd
+  - psb
+  - tga
+  - qoi
+  - dds
+  - ktx2
+  - pcx
+  - pbm
+  - pgm
+  - ppm
+  - pnm
+  - pam
+  - pfm
+  - sgi
+  - rgb
+  - ras
+  - xbm
+  - xpm
+  - wbmp
+  - ff
+  - hdr
+  - fits
+  - avif
+  - heic
+  - heif
+  - jxl
+  - jp2
+  - exr
+  - dpx
+  - iff
+  - xwd
+  - pgx
+  - mp4
+  - webm
+  - mkv
+  - mov
+  - avi
+  - m3u8
+  - mpd
+  - mp3
+  - ogg
+  - wav
+  - flac
+  - m4a
+  - aac
+  - opus
+  - glb
+  - gltf
+  - ply
+  - spz
+  - sog
+  - splat
+  - ksplat
+  - pdf
+  - schem
+  - litematic
+  - nbt
+  - mcstructure
+  - schematic
+
+# 拡張子のない URL (例: 画像の配信サービスの URL) を「リンク」のマーカーとして出すか
+allow-no-extension: true
+
+# 出さないホストを追加します (そのホストと、その下のサブドメイン)。
+# 次のものは、ここに書かなくても常に出しません:
+#   http / https 以外、localhost、127.x、10.x、172.16-31.x、192.168.x、169.254.x、100.64/10、
+#   *.local / *.internal / *.lan / *.home.arpa、ドットのない名前、ブラウザーがつながない番号のポート
+blocked-hosts: []
+
+scan:
+  # region ファイルを読むスレッドの数 (1-8)。増やすと速くなりますが、サーバーの負荷が上がります
+  threads: 2
+  # region ファイル 1 つを読むごとに空ける時間 (ミリ秒)
+  pause-millis-per-region: 40
+  # 更新された region ファイルだけをもう一度読む間隔 (分)。0 で起動時だけ
+  rescan-interval-minutes: 30
+
+marker:
+  set-label: "MarumaSign"
+  # 最初から隠しておく (マップ画面のメニューでオンにする)
+  default-hidden: false
+  # 画像のサムネイルの大きさ (ピクセル)
+  thumbnail-size: 96
+  # この距離 (ブロック) より遠いマーカーは隠します。0 で無制限
+  max-distance: 600
+
+# BlueMap が見つけられないときだけ、ワールド名 → region ディレクトリを指定します
+# regions:
+#   main: /path/to/region
