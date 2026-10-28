@@ -1,6 +1,5 @@
 package net.torosaba.signmap;
 
-import de.bluecolored.bluemap.api.BlueMapWorld;
 import org.bukkit.World;
 
 import java.nio.file.Files;
@@ -15,17 +14,13 @@ final class RegionDirs {
     private RegionDirs() {
     }
 
-    static Path resolve(World world, BlueMapWorld blueMapWorld, String override, Logger log) {
+    static Path resolve(World world, Path extraBase, String override, Logger log) {
         if (override != null && !override.isBlank()) {
             final Path p = Path.of(override);
             return Files.isDirectory(p) ? p : null;
         }
         final List<Path> bases = new ArrayList<>();
-        try {
-            bases.add(blueMapWorld.getSaveFolder());
-        } catch (RuntimeException | LinkageError e) {
-            // BlueMap の版によっては取れない
-        }
+        if (extraBase != null) bases.add(extraBase);
         bases.add(world.getWorldFolder().toPath());
         for (Path base : bases) {
             if (base == null) continue;

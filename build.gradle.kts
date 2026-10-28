@@ -9,6 +9,7 @@ repositories {
     mavenCentral()
     maven("https://repo.papermc.io/repository/maven-public/")
     maven("https://repo.bluecolored.de/releases")
+    maven("https://repo.mikeprimm.com/")
 }
 
 java {
@@ -20,6 +21,7 @@ java {
 dependencies {
     compileOnly("io.papermc.paper:paper-api:26.3.build.227-stable")
     compileOnly("de.bluecolored:bluemap-api:2.7.8")
+    compileOnly("us.dynmap:DynmapCoreAPI:3.8") { isTransitive = false }
     compileOnly("com.google.code.gson:gson:2.11.0")
 
     testImplementation("com.google.code.gson:gson:2.11.0")

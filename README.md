@@ -1,7 +1,8 @@
 # BlueMapMarumaSign
 
-[MarumaSign](https://github.com/marumasa/MarumaSign) (クライアント側 Mod) の看板を、[BlueMap](https://bluemap.bluecolored.de/) の 3D マップに
-マーカーとして出す Paper プラグインです。TORO サーバー (Paper 26.3) の `3d-map` 用。**非公開リポジトリです。公開しないでください。**
+[MarumaSign](https://github.com/marumasa/MarumaSign) (クライアント側 Mod) の看板を、[BlueMap](https://bluemap.bluecolored.de/) の 3D マップと
+[Dynmap](https://github.com/webbukkit/dynmap) の地図にマーカーとして出す Paper プラグインです。BlueMap と Dynmap は、どちらか一方だけ入っていても動きます
+(`softdepend`。`config.yml` の `bluemap.enabled` `dynmap.enabled` で地図ごとに切り替えられます)。TORO サーバー (Paper 26.3) の `3d-map` 用。**非公開リポジトリです。公開しないでください。**
 
 MarumaSign はサーバーに Mod が要らず、看板の文字がデータです。看板の 4 行 (表と裏で 8 行) をつなげた文字列が
 
@@ -13,12 +14,13 @@ MarumaSign はサーバーに Mod が要らず、看板の文字がデータで�
 
 ## できること
 
-- BlueMap が有効になったとき、BlueMap の地図があるワールドの **region ファイルを読み取り専用で走査** して、看板の block entity だけを取り出します
+- BlueMap / Dynmap が有効になったとき、地図があるワールド (BlueMap は地図があるワールド、Dynmap は `worlds.txt` で有効な読み込み済みのワールド。`dynmap.worlds` で指定もできます) の **region ファイルを読み取り専用で走査** して、看板の block entity だけを取り出します
   (チャンクは Bukkit で読み込みません。NBT は自前の読み飛ばし式のリーダーで、依存ライブラリはありません)。
 - 結果は `plugins/BlueMapMarumaSign/cache/<ワールド名>.json` に保存します。次からは **region ファイルの更新日時が変わったものだけ** 読み直します。
 - 走査は低い優先度のスレッド (既定 2 本) で、region ごとに間を空けます (既定 40 ms)。30 分ごとに、更新された region だけ再走査します。
 - ゲーム中の看板の編集 (`SignChangeEvent`)・破壊・爆破は、その場でマーカーに反映します。まだ region ファイルに書かれていない変更は、再走査で消えません。
-- 各地図にマーカーセット「MarumaSign」を作ります (マップ画面のメニューでオン・オフできます)。
+- 走査の結果とキャッシュは BlueMap と Dynmap で共通です。
+- 各地図にマーカーセット (レイヤー)「MarumaSign」を作ります (マップ画面のメニューでオン・オフできます)。Dynmap では、同じ HTML をラベルに、大きめのサムネイルをクリックしたときの説明に使い、アイコンは組み込みの看板です。Dynmap のマーカーは `markers.yml` に保存せず、起動のたびに作り直します。
   - 画像 (png / gif / jpg / webp / bmp / svg / avif / ico): サムネイル付きの HTML マーカー。クリックで元の URL を新しいタブで開きます。
   - 動画・音声・3D モデル・ガウシアンスプラッティング・PDF・構造物・その他: 種類のアイコンとラベル、URL の短縮表示、リンク。
   - 遠く (既定 600 ブロック以上) のマーカーは隠します。
@@ -54,7 +56,7 @@ gradle test -Dsignmap.sampleRegions=<region ファイルのフォルダ>
 ## デプロイ (Docker の Paper サーバー)
 
 1. `gradle jar` で JAR を作り、サーバーの `plugins/` に置きます (旧 JAR があれば `plugin_jars_old_*` に退避)。
-2. BlueMap 5.x (`bluemap-*-paper.jar`) が `plugins/` に入っていて、地図が設定されていること (このプラグインは `depend: BlueMap`)。
+2. BlueMap 5.x (`bluemap-*-paper.jar`) か Dynmap (または両方) が `plugins/` に入っていて、地図が設定されていること。
 3. サーバーを再起動します (ログイン中のプレイヤーがいないことを確認してから)。
 4. ログに `[<ワールド名>] Scan finished: ...` が出ます。初回は全 region を読むので時間がかかります。2 回目以降は更新された region だけです。
 

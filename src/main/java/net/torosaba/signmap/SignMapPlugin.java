@@ -1,12 +1,5 @@
 package net.torosaba.signmap;
 
-import de.bluecolored.bluemap.api.BlueMapAPI;
-import de.bluecolored.bluemap.api.BlueMapMap;
-import de.bluecolored.bluemap.api.BlueMapWorld;
-import de.bluecolored.bluemap.api.markers.HtmlMarker;
-import de.bluecolored.bluemap.api.markers.MarkerSet;
-import com.flowpowered.math.vector.Vector2i;
-import com.flowpowered.math.vector.Vector3d;
 import org.bukkit.Bukkit;
 import org.bukkit.World;
 import org.bukkit.command.Command;
@@ -16,46 +9,40 @@ import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Consumer;
 
 /**
- * MarumaSign の形式の看板を BlueMap のマーカーとして出すプラグイン。
+ * MarumaSign の形式の看板を BlueMap / Dynmap のマーカーとして出すプラグイン。
+ * 看板の走査と保存は共通で、地図ごとの出し方は {@link MapBackend} が受け持つ (どちらか一方だけ入っていても動く)。
  */
 public final class SignMapPlugin extends JavaPlugin {
 
     static final String MARKER_SET_ID = "marumasign";
 
-    private Settings settings = new Settings();
-    private UrlFilter filter = new UrlFilter(List.of());
-    private MarkerHtml markerHtml = new MarkerHtml(filter, settings);
+    private volatile Settings settings = new Settings();
+    private volatile MarkerHtml markerHtml = new MarkerHtml(new UrlFilter(List.of()), settings);
 
-    /** BlueMap の地図があるワールド (Bukkit のワールドの名前 → 状態) */
     private final Map<String, WorldState> worlds = new ConcurrentHashMap<>();
+    private final List<MapBackend> backends = new CopyOnWriteArrayList<>();
     private volatile ScheduledExecutorService scheduler;
     private final AtomicBoolean scanning = new AtomicBoolean();
+    private final AtomicBoolean scanRequested = new AtomicBoolean();
     private volatile boolean shuttingDown;
-
-    private final Consumer<BlueMapAPI> onBlueMapEnable = this::enableBlueMap;
-    private final Consumer<BlueMapAPI> onBlueMapDisable = this::disableBlueMap;
 
     static final class WorldState {
         final String name;
         final Path regionDir;
         final SignStore store = new SignStore();
         final Path cacheFile;
-        volatile List<BlueMapMap> maps = List.of();
 
         WorldState(String name, Path regionDir, Path cacheFile) {
             this.name = name;
@@ -68,17 +55,57 @@ public final class SignMapPlugin extends JavaPlugin {
     public void onEnable() {
         saveDefaultConfig();
         loadSettings();
-        getServer().getPluginManager().registerEvents(new SignListener(this), this);
         shuttingDown = false;
-        BlueMapAPI.onEnable(onBlueMapEnable);
-        BlueMapAPI.onDisable(onBlueMapDisable);
+        getServer().getPluginManager().registerEvents(new SignListener(this), this);
+        scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+            final Thread t = new Thread(r, "BlueMapMarumaSign-main");
+            t.setDaemon(true);
+            t.setPriority(Thread.MIN_PRIORITY);
+            return t;
+        });
+        if (getConfig().getBoolean("bluemap.enabled", true)) {
+            if (Bukkit.getPluginManager().getPlugin("BlueMap") != null) {
+                addBackend(Backends.blueMap(this));
+            } else {
+                getLogger().info("BlueMap is not installed; BlueMap markers are off");
+            }
+        }
+        if (getConfig().getBoolean("dynmap.enabled", true)) {
+            if (Bukkit.getPluginManager().getPlugin("dynmap") != null) {
+                addBackend(Backends.dynmap(this));
+            } else {
+                getLogger().info("Dynmap is not installed; Dynmap markers are off");
+            }
+        }
+        if (backends.isEmpty()) getLogger().warning("No map plugin (BlueMap or Dynmap) is enabled; nothing to do");
+        final ScheduledExecutorService s = scheduler;
+        if (settings.rescanIntervalMinutes > 0) {
+            s.scheduleWithFixedDelay(this::requestScan, settings.rescanIntervalMinutes, settings.rescanIntervalMinutes, TimeUnit.MINUTES);
+        }
+        s.scheduleWithFixedDelay(this::saveDirty, 5, 5, TimeUnit.MINUTES);
+    }
+
+    private void addBackend(MapBackend backend) {
+        backends.add(backend);
+        try {
+            backend.start();
+        } catch (RuntimeException | LinkageError e) {
+            getLogger().warning(backend.name() + " support failed to start: " + e);
+            backends.remove(backend);
+        }
     }
 
     @Override
     public void onDisable() {
         shuttingDown = true;
-        BlueMapAPI.unregisterListener(onBlueMapEnable);
-        BlueMapAPI.unregisterListener(onBlueMapDisable);
+        for (MapBackend b : backends) {
+            try {
+                b.stop();
+            } catch (RuntimeException | LinkageError e) {
+                getLogger().warning(b.name() + " support failed to stop: " + e);
+            }
+        }
+        backends.clear();
         final ScheduledExecutorService s = scheduler;
         if (s != null) s.shutdownNow();
         for (WorldState w : worlds.values()) saveCache(w);
@@ -101,13 +128,15 @@ public final class SignMapPlugin extends JavaPlugin {
             }
             case "rescan" -> {
                 sender.sendMessage("MarumaSign map: scanning changed region files in the background.");
-                runScan();
+                requestScan();
             }
             default -> {
                 for (WorldState w : worlds.values()) {
                     sender.sendMessage("MarumaSign map [" + w.name + "]: " + w.store.count() + " signs");
                 }
-                if (worlds.isEmpty()) sender.sendMessage("MarumaSign map: BlueMap is not enabled or has no maps.");
+                final StringBuilder sb = new StringBuilder("MarumaSign map backends:");
+                for (MapBackend b : backends) sb.append(' ').append(b.name());
+                sender.sendMessage(sb.toString());
             }
         }
         return true;
@@ -129,84 +158,90 @@ public final class SignMapPlugin extends JavaPlugin {
         s.defaultHidden = c.getBoolean("marker.default-hidden", s.defaultHidden);
         s.markerSetLabel = c.getString("marker.set-label", s.markerSetLabel);
         this.settings = s;
-        this.filter = new UrlFilter(s.blockedHosts);
-        this.markerHtml = new MarkerHtml(filter, s);
+        this.markerHtml = new MarkerHtml(new UrlFilter(s.blockedHosts), s);
     }
 
-    // ---- BlueMap ----
+    Settings settings() {
+        return settings;
+    }
 
-    private void enableBlueMap(BlueMapAPI api) {
-        getLogger().info("BlueMap " + api.getBlueMapVersion() + " enabled; preparing MarumaSign markers");
-        worlds.clear();
+    MarkerHtml markerHtml() {
+        return markerHtml;
+    }
+
+    // ---- ワールドと走査 ----
+
+    /**
+     * 看板を調べるワールドとして登録する (保存してあるキャッシュも読む)。同じワールドを複数の地図から登録してもよい。
+     * region ディレクトリが見つからなければ null。
+     */
+    WorldState registerWorld(World world, Path extraBase) {
+        final WorldState existing = worlds.get(world.getName());
+        if (existing != null) return existing;
         final ConfigurationSection overrides = getConfig().getConfigurationSection("regions");
-        for (World world : Bukkit.getWorlds()) {
-            final BlueMapWorld bw = api.getWorld(world).orElse(null);
-            if (bw == null || bw.getMaps().isEmpty()) continue;
-            final Path regionDir = RegionDirs.resolve(world, bw, overrides == null ? null : overrides.getString(world.getName()), getLogger());
-            if (regionDir == null) {
-                getLogger().warning("No region directory found for world '" + world.getName() + "'; skipped");
-                continue;
-            }
-            final Path cache = getDataFolder().toPath().resolve("cache").resolve(safeName(world.getName()) + ".json");
-            final WorldState state = new WorldState(world.getName(), regionDir, cache);
-            try {
-                state.store.load(cache);
-                getLogger().info("[" + world.getName() + "] Loaded " + state.store.count() + " signs from cache");
-            } catch (IOException e) {
-                getLogger().warning("[" + world.getName() + "] Ignoring cache: " + e.getMessage());
-            }
-            state.maps = new ArrayList<>(bw.getMaps());
-            worlds.put(world.getName(), state);
-            getLogger().info("[" + world.getName() + "] Region directory: " + regionDir);
+        final Path regionDir = RegionDirs.resolve(world, extraBase, overrides == null ? null : overrides.getString(world.getName()), getLogger());
+        if (regionDir == null) {
+            getLogger().warning("No region directory found for world '" + world.getName() + "'; skipped");
+            return null;
         }
-        refreshMarkers();
-        final ScheduledExecutorService s = Executors.newSingleThreadScheduledExecutor(r -> {
-            final Thread t = new Thread(r, "BlueMapMarumaSign-main");
-            t.setDaemon(true);
-            t.setPriority(Thread.MIN_PRIORITY);
-            return t;
-        });
-        scheduler = s;
-        s.execute(this::runScan);
-        if (settings.rescanIntervalMinutes > 0) {
-            s.scheduleWithFixedDelay(this::runScan, settings.rescanIntervalMinutes, settings.rescanIntervalMinutes, TimeUnit.MINUTES);
+        final Path cache = getDataFolder().toPath().resolve("cache").resolve(safeName(world.getName()) + ".json");
+        final WorldState state = new WorldState(world.getName(), regionDir, cache);
+        try {
+            state.store.load(cache);
+            getLogger().info("[" + world.getName() + "] Loaded " + state.store.count() + " signs from cache");
+        } catch (IOException e) {
+            getLogger().warning("[" + world.getName() + "] Ignoring cache: " + e.getMessage());
         }
-        s.scheduleWithFixedDelay(this::saveDirty, 5, 5, TimeUnit.MINUTES);
+        final WorldState prev = worlds.putIfAbsent(world.getName(), state);
+        if (prev != null) return prev;
+        getLogger().info("[" + world.getName() + "] Region directory: " + regionDir);
+        return state;
     }
 
-    private void disableBlueMap(BlueMapAPI api) {
-        final ScheduledExecutorService s = scheduler;
-        if (s != null) s.shutdownNow();
-        for (WorldState w : worlds.values()) saveCache(w);
-        worlds.clear();
+    WorldState worldState(String name) {
+        return worlds.get(name);
     }
 
     private static String safeName(String name) {
         return name.replaceAll("[^A-Za-z0-9_.-]", "_");
     }
 
+    /** 更新された region ファイルの走査を頼む (実行中なら、終わってからもう一度) */
+    void requestScan() {
+        final ScheduledExecutorService s = scheduler;
+        if (s == null || shuttingDown) return;
+        scanRequested.set(true);
+        try {
+            s.execute(this::runScan);
+        } catch (RuntimeException e) {
+            // 止まっている途中
+        }
+    }
+
     private void runScan() {
         if (shuttingDown || !scanning.compareAndSet(false, true)) return;
         try {
-            for (WorldState w : new ArrayList<>(worlds.values())) {
-                if (shuttingDown) return;
-                try {
-                    final WorldScanner scanner = new WorldScanner(getLogger(), w.name, w.regionDir, w.store,
-                            settings.scanThreads, settings.pauseMillisPerRegion);
-                    final WorldScanner.Summary sum = scanner.scan(500, this::refreshMarkers);
-                    if (sum.regionsScanned > 0) {
-                        getLogger().info("[" + w.name + "] Scan finished: " + sum.regionsScanned + "/" + sum.regionsTotal
-                                + " regions, " + sum.chunks + " chunks, " + sum.rawSigns + " signs, " + sum.marumaSigns
-                                + " MarumaSign signs, " + sum.chunkErrors + " chunk errors, " + sum.fileErrors + " file errors, "
-                                + sum.millis / 1000.0 + " s");
-                        saveCache(w);
-                        refreshMarkers();
+            while (scanRequested.getAndSet(false)) {
+                for (WorldState w : new ArrayList<>(worlds.values())) {
+                    if (shuttingDown) return;
+                    try {
+                        final WorldScanner scanner = new WorldScanner(getLogger(), w.name, w.regionDir, w.store,
+                                settings.scanThreads, settings.pauseMillisPerRegion);
+                        final WorldScanner.Summary sum = scanner.scan(500, this::refreshMarkers);
+                        if (sum.regionsScanned > 0) {
+                            getLogger().info("[" + w.name + "] Scan finished: " + sum.regionsScanned + "/" + sum.regionsTotal
+                                    + " regions, " + sum.chunks + " chunks, " + sum.rawSigns + " signs, " + sum.marumaSigns
+                                    + " MarumaSign signs, " + sum.chunkErrors + " chunk errors, " + sum.fileErrors
+                                    + " file errors, " + sum.millis / 1000.0 + " s");
+                            saveCache(w);
+                            refreshMarkers();
+                        }
+                    } catch (IOException e) {
+                        getLogger().warning("[" + w.name + "] Scan failed: " + e);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return;
                     }
-                } catch (IOException e) {
-                    getLogger().warning("[" + w.name + "] Scan failed: " + e);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    return;
                 }
             }
         } finally {
@@ -230,53 +265,30 @@ public final class SignMapPlugin extends JavaPlugin {
 
     // ---- マーカー ----
 
-    private final Object markerLock = new Object();
+    /** そのワールドで地図に出す看板 (表示してよいもの。最大数まで) */
+    List<MarkerHtml.View> views(WorldState w) {
+        final List<MarkerHtml.View> out = new ArrayList<>();
+        final MarkerHtml html = markerHtml;
+        final int max = settings.maxMarkers;
+        for (SignRecord sign : w.store.all()) {
+            if (out.size() >= max) break;
+            final MarkerHtml.View view = html.classify(sign);
+            if (view != null) out.add(view);
+        }
+        return out;
+    }
 
-    /** 看板の一覧から、BlueMap の各地図のマーカーセットを作り直す */
     void refreshMarkers() {
-        synchronized (markerLock) {
-            for (WorldState w : worlds.values()) {
-                final MarkerSet set = buildMarkerSet(w);
-                for (BlueMapMap map : w.maps) {
-                    map.getMarkerSets().put(MARKER_SET_ID, set);
-                }
+        for (MapBackend b : backends) {
+            try {
+                b.refresh();
+            } catch (RuntimeException e) {
+                getLogger().warning(b.name() + " marker refresh failed: " + e);
             }
         }
     }
 
-    private MarkerSet buildMarkerSet(WorldState w) {
-        final MarkerSet set = MarkerSet.builder()
-                .label(settings.markerSetLabel)
-                .toggleable(true)
-                .defaultHidden(settings.defaultHidden)
-                .build();
-        int count = 0;
-        for (SignRecord sign : w.store.all()) {
-            if (count >= settings.maxMarkers) break;
-            final MarkerHtml.View view = markerHtml.classify(sign);
-            if (view == null) continue;
-            set.put(markerId(sign), buildMarker(view));
-            count++;
-        }
-        return set;
-    }
-
-    private static String markerId(SignRecord s) {
-        return "sign_" + s.x() + "_" + s.y() + "_" + s.z();
-    }
-
-    private HtmlMarker buildMarker(MarkerHtml.View view) {
-        final SignRecord s = view.sign();
-        final HtmlMarker.Builder b = HtmlMarker.builder()
-                .label(markerHtml.label(view))
-                .position(new Vector3d(s.x() + 0.5, s.y() + 0.5, s.z() + 0.5))
-                .anchor(new Vector2i(0, 0))
-                .html(markerHtml.html(view));
-        if (settings.maxDistance > 0) b.maxDistance(settings.maxDistance);
-        return b.build();
-    }
-
-    /** ゲーム中の看板の追加・変更・削除を反映する */
+    /** ゲーム中の看板の追加・変更を反映する */
     void signChanged(World world, int x, int y, int z, String text) {
         final WorldState w = worlds.get(world.getName());
         if (w == null) return;
@@ -288,32 +300,17 @@ public final class SignMapPlugin extends JavaPlugin {
         final SignRecord record = new SignRecord(x, y, z, spec.url());
         w.store.liveSet(record);
         final MarkerHtml.View view = markerHtml.classify(record);
-        for (BlueMapMap map : w.maps) {
-            final MarkerSet set = map.getMarkerSets().get(MARKER_SET_ID);
-            if (set == null) continue;
-            if (view == null) set.remove(markerId(record));
-            else if (set.getMarkers().size() < settings.maxMarkers || set.get(markerId(record)) != null) {
-                set.put(markerId(record), buildMarker(view));
-            }
-        }
+        for (MapBackend b : backends) b.signUpdated(world.getName(), record, view);
     }
 
     void signRemoved(World world, int x, int y, int z) {
         final WorldState w = worlds.get(world.getName());
         if (w == null) return;
         if (!w.store.liveRemove(x, y, z)) return;
-        final String id = "sign_" + x + "_" + y + "_" + z;
-        for (BlueMapMap map : w.maps) {
-            final MarkerSet set = map.getMarkerSets().get(MARKER_SET_ID);
-            if (set != null) set.remove(id);
-        }
+        for (MapBackend b : backends) b.signRemoved(world.getName(), x, y, z);
     }
 
     boolean tracks(World world) {
         return worlds.containsKey(world.getName());
-    }
-
-    Collection<WorldState> worldStates() {
-        return worlds.values();
     }
 }

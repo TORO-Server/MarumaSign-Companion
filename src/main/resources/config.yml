@@ -1,7 +1,15 @@
 # BlueMapMarumaSign の設定
 # MarumaSign 形式の看板 (URL|X|Y|Z|横幅|高さ|Z回転|Y回転|X回転) を BlueMap のマーカーとして出します。
 
-# 1 つの地図に出すマーカーの最大数 (超えた分は出しません)
+# 地図ごとに出すかどうか (プラグインが入っていなければ、true でも何もしません)
+bluemap:
+  enabled: true
+dynmap:
+  enabled: true
+  # Dynmap に出すワールド。空なら、Dynmap が地図を作る (worlds.txt で有効な) 読み込み済みのワールドすべて
+  worlds: []
+
+# 1 つの地図 (Dynmap ではワールド) に出すマーカーの最大数 (超えた分は出しません)
 max-markers: 5000
 
 # マーカーにする URL の拡張子。ここにない拡張子の URL は出しません。

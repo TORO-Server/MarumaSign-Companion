@@ -33,9 +33,13 @@ public final class MarkerHtml {
     }
 
     public String html(View view) {
+        return html(view, settings.thumbnailSize);
+    }
+
+    /** size は画像のサムネイルの最大の大きさ (ピクセル) */
+    public String html(View view, int size) {
         final String url = escape(view.url());
         final String link = "<a href=\"" + url + "\" target=\"_blank\" rel=\"noopener noreferrer nofollow\"";
-        final int size = settings.thumbnailSize;
         if (view.kind() == MediaKind.IMAGE && MediaKind.isBrowserImage(view.extension())) {
             return "<div style=\"background:#fff;padding:2px;border-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,.6);line-height:0\">"
                     + link + " title=\"" + escape(shorten(view.url(), 80)) + "\">"
