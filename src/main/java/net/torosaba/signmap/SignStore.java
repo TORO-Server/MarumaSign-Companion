@@ -24,7 +24,8 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class SignStore {
 
-    private static final int CACHE_VERSION = 1;
+    // 2: 看板の数値 (位置・大きさ・回転) と向きを持つようになった。古いキャッシュは読まずに、もう一度走査する
+    private static final int CACHE_VERSION = 2;
 
     static final class Region {
         volatile long mtime;
@@ -144,6 +145,8 @@ public final class SignStore {
                 a.add(s.y());
                 a.add(s.z());
                 a.add(s.url());
+                a.add(s.orient());
+                for (float v : s.values()) a.add(v);
                 signs.add(a);
             }
             o.add("signs", signs);
@@ -172,7 +175,10 @@ public final class SignStore {
                 final List<SignRecord> list = new ArrayList<>();
                 for (JsonElement s : o.getAsJsonArray("signs")) {
                     final JsonArray a = s.getAsJsonArray();
-                    list.add(new SignRecord(a.get(0).getAsInt(), a.get(1).getAsInt(), a.get(2).getAsInt(), a.get(3).getAsString()));
+                    final float[] values = new float[SignRecord.VALUE_COUNT];
+                    for (int i = 0; i < values.length; i++) values[i] = a.get(5 + i).getAsFloat();
+                    list.add(new SignRecord(a.get(0).getAsInt(), a.get(1).getAsInt(), a.get(2).getAsInt(),
+                            a.get(3).getAsString(), values, a.get(4).getAsInt()));
                 }
                 final Map<Long, SignRecord> map = new ConcurrentHashMap<>();
                 for (SignRecord s : list) map.put(s.key(), s);

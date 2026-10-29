@@ -19,8 +19,11 @@ public final class SignTextExtractor {
     private static final int END = 0, BYTE = 1, SHORT = 2, INT = 3, LONG = 4, FLOAT = 5, DOUBLE = 6, BYTE_ARRAY = 7,
             STRING = 8, LIST = 9, COMPOUND = 10, INT_ARRAY = 11, LONG_ARRAY = 12;
 
-    /** 看板 1 枚分 (表と裏の文字をつないだもの) */
-    public record RawSign(int x, int y, int z, String text) {
+    /** 看板 1 枚分 (表と裏の文字をつないだもの)。orient は {@link Orient} の符号 (MarumaSign の形式の看板だけ調べる) */
+    public record RawSign(int x, int y, int z, String text, int orient) {
+        public RawSign(int x, int y, int z, String text) {
+            this(x, y, z, text, Orient.NONE);
+        }
     }
 
     private SignTextExtractor() {
@@ -32,7 +35,172 @@ public final class SignTextExtractor {
         if (buf.remaining() < 3 || buf.get() != COMPOUND) return result;
         skipString(buf); // ルートの名前
         readRoot(buf, result);
+        if (!result.isEmpty()) addOrientations(data, result);
         return result;
+    }
+
+    // ---- 看板の向き (sections の block_states のパレット) ----
+
+    // MarumaSign の形式かもしれない看板 ('|' が 8 つ以上) だけ向きを調べる。ふつうの看板のためにブロックを読まない
+    private static boolean maybeMaruma(String text) {
+        int n = 0;
+        for (int i = 0, len = text.length(); i < len; i++) {
+            if (text.charAt(i) == '|' && ++n >= 8) return true;
+        }
+        return false;
+    }
+
+    private static void addOrientations(byte[] data, List<RawSign> signs) {
+        // セクション (Y を 16 で割った値) ごとに、調べる看板の位置
+        java.util.Map<Integer, List<Integer>> needed = null;
+        for (int i = 0; i < signs.size(); i++) {
+            final RawSign s = signs.get(i);
+            if (!maybeMaruma(s.text())) continue;
+            if (needed == null) needed = new java.util.HashMap<>();
+            needed.computeIfAbsent(s.y() >> 4, k -> new ArrayList<>()).add(i);
+        }
+        if (needed == null) return;
+        final int[] orient = new int[signs.size()];
+        java.util.Arrays.fill(orient, Orient.NONE);
+        try {
+            final ByteBuffer buf = ByteBuffer.wrap(data);
+            buf.get();
+            skipString(buf);
+            readSections(buf, signs, needed, orient);
+        } catch (RuntimeException e) {
+            // 読めなければ向きは分からないまま (地図には出る)
+        }
+        for (int i = 0; i < signs.size(); i++) {
+            final RawSign s = signs.get(i);
+            if (orient[i] != Orient.NONE) signs.set(i, new RawSign(s.x(), s.y(), s.z(), s.text(), orient[i]));
+        }
+    }
+
+    private static void readSections(ByteBuffer buf, List<RawSign> signs, java.util.Map<Integer, List<Integer>> needed, int[] out) {
+        while (buf.hasRemaining()) {
+            final int type = buf.get();
+            if (type == END) return;
+            final String name = readString(buf);
+            if (type == LIST && name.equals("sections")) {
+                final int elementType = buf.get();
+                final int count = buf.getInt();
+                if (elementType != COMPOUND) {
+                    for (int i = 0; i < count; i++) skip(buf, elementType);
+                    continue;
+                }
+                for (int i = 0; i < count; i++) readSection(buf, signs, needed, out);
+            } else if (type == COMPOUND && name.equals("Level")) {
+                readSections(buf, signs, needed, out);
+            } else {
+                skip(buf, type);
+            }
+        }
+    }
+
+    private static void readSection(ByteBuffer buf, List<RawSign> signs, java.util.Map<Integer, List<Integer>> needed, int[] out) {
+        int sectionY = Integer.MIN_VALUE;
+        int statesStart = -1;
+        while (true) {
+            final int type = buf.get();
+            if (type == END) break;
+            final String name = readString(buf);
+            if (name.equals("Y") && type == BYTE) {
+                sectionY = buf.get();
+            } else if (name.equals("block_states") && type == COMPOUND) {
+                statesStart = buf.position();
+                skip(buf, type);
+            } else {
+                skip(buf, type);
+            }
+        }
+        if (statesStart < 0) return;
+        final List<Integer> wanted = needed.get(sectionY);
+        if (wanted == null) return;
+        final int end = buf.position();
+        buf.position(statesStart);
+        try {
+            readPaletteAndData(buf, wanted, signs, out);
+        } finally {
+            buf.position(end);
+        }
+    }
+
+    // block_states の中身を読み、wanted の看板の位置のブロックから向きを決める
+    private static void readPaletteAndData(ByteBuffer buf, List<Integer> wanted, List<RawSign> signs, int[] out) {
+        int[] orients = null;
+        long[] longs = null;
+        while (true) {
+            final int type = buf.get();
+            if (type == END) break;
+            final String name = readString(buf);
+            if (name.equals("palette") && type == LIST) {
+                final int elementType = buf.get();
+                final int count = buf.getInt();
+                if (elementType != COMPOUND) {
+                    for (int i = 0; i < count; i++) skip(buf, elementType);
+                    continue;
+                }
+                orients = new int[count];
+                for (int i = 0; i < count; i++) orients[i] = readPaletteEntry(buf);
+            } else if (name.equals("data") && type == LONG_ARRAY) {
+                final int n = buf.getInt();
+                if (n < 0 || n > 4096) throw new IllegalArgumentException("Bad block data length");
+                longs = new long[n];
+                for (int i = 0; i < n; i++) longs[i] = buf.getLong();
+            } else {
+                skip(buf, type);
+            }
+        }
+        if (orients == null || orients.length == 0) return;
+        final int bits = Math.max(4, 32 - Integer.numberOfLeadingZeros(orients.length - 1));
+        final int perLong = 64 / bits;
+        final long mask = (1L << bits) - 1;
+        for (int idx : wanted) {
+            final RawSign s = signs.get(idx);
+            final int index = (((s.y() & 15) << 4 | (s.z() & 15)) << 4) | (s.x() & 15);
+            int p = 0;
+            if (orients.length > 1) {
+                if (longs == null) continue;
+                final int li = index / perLong;
+                if (li >= longs.length) continue;
+                p = (int) ((longs[li] >>> ((index % perLong) * bits)) & mask);
+            }
+            if (p < orients.length) out[idx] = orients[p];
+        }
+    }
+
+    // パレットの 1 つ (Name と Properties) から向きの符号
+    private static int readPaletteEntry(ByteBuffer buf) {
+        String blockName = null, rotation = null, facing = null;
+        boolean modern = false;
+        while (true) {
+            final int type = buf.get();
+            if (type == END) break;
+            final String name = readString(buf);
+            // 1.18-1.21 は Name / Properties。26.x は id / properties で、プロパティがすべて初期値のブロックは
+            // 名前だけを、空の名前のキー ("") に入れて書く
+            if ((name.equals("Name") || name.equals("id") || name.isEmpty()) && type == STRING) {
+                blockName = readString(buf);
+                modern |= !name.equals("Name");
+            } else if ((name.equals("Properties") || name.equals("properties")) && type == COMPOUND) {
+                while (true) {
+                    final int t = buf.get();
+                    if (t == END) break;
+                    final String key = readString(buf);
+                    if (t == STRING) {
+                        final String value = readString(buf);
+                        if (key.equals("rotation")) rotation = value;
+                        else if (key.equals("facing")) facing = value;
+                    } else {
+                        skip(buf, t);
+                    }
+                }
+            } else {
+                skip(buf, type);
+            }
+        }
+        // プロパティがないのは、初期値のブロック。立て看板の rotation の初期値は、26.x では 8 (北)、それ以前は 0
+        return Orient.fromState(blockName, rotation, facing, modern ? 8 : 0);
     }
 
     private static void readRoot(ByteBuffer buf, List<RawSign> out) {

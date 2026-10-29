@@ -99,7 +99,7 @@ public final class WorldScanner {
                             final MarumaSpec spec = MarumaSpec.parse(s.text());
                             if (spec == null) continue;
                             if (spec.url().length() > UrlFilter.MAX_URL_LENGTH) continue;
-                            found.add(new SignRecord(s.x(), s.y(), s.z(), spec.url()));
+                            found.add(new SignRecord(s.x(), s.y(), s.z(), spec.url(), spec.values(), s.orient()));
                         }
                         raw.addAndGet(result.signs.size());
                         maruma.addAndGet(found.size());

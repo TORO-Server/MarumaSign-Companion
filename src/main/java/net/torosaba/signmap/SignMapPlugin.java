@@ -61,6 +61,18 @@ public final class SignMapPlugin extends JavaPlugin {
         saveDefaultConfig();
         loadSettings();
         shuttingDown = false;
+        if (settings.dnsCheck) {
+            final HostGuard g = new HostGuard(getLogger(), true, this::refreshMarkers);
+            g.start();
+            hostGuard = g;
+        }
+        if (settings.resolveShortLinks) {
+            final ShortLinkResolver r = new ShortLinkResolver(getLogger(), new UrlFilter(settings.blockedHosts), settings.shortLinkHosts,
+                    getDataFolder().toPath().resolve("shortlinks.json"), this::refreshMarkers);
+            r.load();
+            r.start();
+            resolver = r;
+        }
         getServer().getPluginManager().registerEvents(new SignListener(this), this);
         liveExecutor = Executors.newSingleThreadExecutor(r -> {
             final Thread t = new Thread(r, "BlueMapMarumaSign-live");
@@ -116,6 +128,12 @@ public final class SignMapPlugin extends JavaPlugin {
             }
         }
         backends.clear();
+        final ShortLinkResolver r = resolver;
+        resolver = null;
+        if (r != null) r.stop();
+        final HostGuard g = hostGuard;
+        hostGuard = null;
+        if (g != null) g.stop();
         final ScheduledExecutorService s = scheduler;
         if (s != null) s.shutdownNow();
         final ExecutorService live = liveExecutor;
@@ -149,6 +167,12 @@ public final class SignMapPlugin extends JavaPlugin {
                 final StringBuilder sb = new StringBuilder("MarumaSign map backends:");
                 for (MapBackend b : backends) sb.append(' ').append(b.name());
                 sender.sendMessage(sb.toString());
+                final ShortLinkResolver r = resolver;
+                if (r != null) {
+                    sender.sendMessage("MarumaSign map: short links resolved " + r.resolvedCount() + ", waiting " + r.pending());
+                }
+                final HostGuard g = hostGuard;
+                if (g != null) sender.sendMessage("MarumaSign map: hosts waiting for the DNS check " + g.pending());
             }
         }
         return true;
@@ -168,9 +192,47 @@ public final class SignMapPlugin extends JavaPlugin {
         s.thumbnailSize = Math.max(16, Math.min(512, c.getInt("marker.thumbnail-size", s.thumbnailSize)));
         s.maxDistance = c.getDouble("marker.max-distance", s.maxDistance);
         s.defaultHidden = c.getBoolean("marker.default-hidden", s.defaultHidden);
+        s.dynmapDefaultHidden = c.getBoolean("dynmap.default-hidden", s.dynmapDefaultHidden);
         s.markerSetLabel = c.getString("marker.set-label", s.markerSetLabel);
+        final String mode = c.getString("bluemap.mode", s.bluemapMode).toLowerCase(java.util.Locale.ROOT);
+        if (mode.equals("3d") || mode.equals("markers") || mode.equals("both")) s.bluemapMode = mode;
+        else getLogger().warning("Unknown bluemap.mode '" + mode + "'; using " + s.bluemapMode);
+        s.resolveShortLinks = c.getBoolean("short-links.resolve", s.resolveShortLinks);
+        final List<String> hosts = c.getStringList("short-links.hosts");
+        if (!hosts.isEmpty()) {
+            s.shortLinkHosts = new java.util.TreeSet<>();
+            for (String h : hosts) s.shortLinkHosts.add(h.trim().toLowerCase(java.util.Locale.ROOT));
+        }
+        s.dnsCheck = c.getBoolean("security.dns-check", s.dnsCheck);
+        s.web3dMaxSize = Math.max(1, Math.min(1000, c.getDouble("web3d.max-size", s.web3dMaxSize)));
+        s.web3dMaxOffset = Math.max(1, Math.min(1000, c.getDouble("web3d.max-offset", s.web3dMaxOffset)));
+        s.web3dMaxSigns = Math.max(0, c.getInt("web3d.max-signs", s.web3dMaxSigns));
+        s.web3dDrawDistance = Math.max(16, Math.min(512, c.getInt("web3d.draw-distance", s.web3dDrawDistance)));
+        s.web3dMaxActive = Math.max(10, Math.min(1000, c.getInt("web3d.max-active", s.web3dMaxActive)));
+        s.web3dTextureSize = Math.max(64, Math.min(4096, c.getInt("web3d.texture-size", s.web3dTextureSize)));
         this.settings = s;
-        this.markerHtml = new MarkerHtml(new UrlFilter(s.blockedHosts), s);
+        final UrlFilter filter = new UrlFilter(s.blockedHosts);
+        this.markerHtml = new MarkerHtml(filter, s);
+        final ShortLinkResolver r = resolver;
+        if (r != null) r.setHosts(s.shortLinkHosts);
+    }
+
+    private volatile ShortLinkResolver resolver;
+
+    ShortLinkResolver resolver() {
+        return resolver;
+    }
+
+    /** 短縮 URL は行き先が分かっていれば行き先に置き換える (まだなら調べるよう頼む) */
+    SignRecord effective(SignRecord sign) {
+        final ShortLinkResolver r = resolver;
+        if (r == null || !r.isShort(sign.url())) return sign;
+        final String target = r.resolved(sign.url());
+        if (target == null) {
+            r.request(sign.url());
+            return sign;
+        }
+        return sign.withUrl(target);
     }
 
     Settings settings() {
@@ -300,10 +362,45 @@ public final class SignMapPlugin extends JavaPlugin {
         final int max = settings.maxMarkers;
         for (SignRecord sign : w.store.all()) {
             if (out.size() >= max) break;
-            final MarkerHtml.View view = html.classify(sign);
+            final MarkerHtml.View view = classify(sign);
             if (view != null) out.add(view);
         }
         return out;
+    }
+
+    /** 3D 表示に出す看板 (最大数まで)。短縮 URL は行き先に置き換えてある */
+    List<MarkerHtml.View> views3d(WorldState w) {
+        final List<MarkerHtml.View> out = new ArrayList<>();
+        final int max = settings.web3dMaxSigns;
+        for (SignRecord sign : w.store.all()) {
+            if (out.size() >= max) break;
+            final MarkerHtml.View view = classify(sign);
+            if (view != null) out.add(view);
+        }
+        return out;
+    }
+
+    /**
+     * 表示してよい看板ならその内容、だめなら null。短縮 URL の行き先への置き換えと、
+     * URL の形・拡張子の確認 ({@link MarkerHtml}) のあと、ホスト名を DNS で引いて公開のアドレスか確かめる ({@link HostGuard})。
+     */
+    MarkerHtml.View classify(SignRecord sign) {
+        final MarkerHtml.View view = markerHtml.classify(effective(sign));
+        if (view == null) return null;
+        final HostGuard guard = hostGuard;
+        if (guard == null) return view;
+        try {
+            final String host = java.net.URI.create(view.url()).getHost();
+            return guard.isPublic(host) ? view : null;
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    private volatile HostGuard hostGuard;
+
+    HostGuard hostGuard() {
+        return hostGuard;
     }
 
     void refreshMarkers() {
@@ -317,7 +414,7 @@ public final class SignMapPlugin extends JavaPlugin {
     }
 
     /** ゲーム中の看板の追加・変更を反映する */
-    void signChanged(World world, int x, int y, int z, String text) {
+    void signChanged(World world, int x, int y, int z, String text, int orient) {
         final WorldState w = worlds.get(world.getName());
         if (w == null) return;
         final MarumaSpec spec = MarumaSpec.parse(text);
@@ -325,9 +422,9 @@ public final class SignMapPlugin extends JavaPlugin {
             signRemoved(world, x, y, z);
             return;
         }
-        final SignRecord record = new SignRecord(x, y, z, spec.url());
+        final SignRecord record = new SignRecord(x, y, z, spec.url(), spec.values(), orient);
         w.store.liveSet(record);
-        final MarkerHtml.View view = markerHtml.classify(record);
+        final MarkerHtml.View view = classify(record);
         final String worldName = world.getName();
         runLive(() -> {
             for (MapBackend b : backends) b.signUpdated(worldName, record, view);
