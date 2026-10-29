@@ -1,5 +1,7 @@
 plugins {
     java
+    kotlin("jvm") version "2.4.21"
+    id("com.gradleup.shadow") version "9.6.1"
 }
 
 group = "net.torosaba"
@@ -12,13 +14,13 @@ repositories {
     maven("https://repo.mikeprimm.com/")
 }
 
-java {
-    toolchain {
-        languageVersion.set(JavaLanguageVersion.of(25))
-    }
+kotlin {
+    jvmToolchain(25)
 }
 
 dependencies {
+    implementation(kotlin("stdlib"))
+
     compileOnly("io.papermc.paper:paper-api:26.3.build.227-stable")
     compileOnly("de.bluecolored:bluemap-api:2.7.8")
     compileOnly("us.dynmap:DynmapCoreAPI:3.8") { isTransitive = false }
@@ -27,6 +29,7 @@ dependencies {
     testImplementation("io.papermc.paper:paper-api:26.3.build.227-stable")
     testImplementation("us.dynmap:DynmapCoreAPI:3.8") { isTransitive = false }
     testImplementation("com.google.code.gson:gson:2.11.0")
+    testImplementation(kotlin("test-junit5"))
     testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.11.4")
 }
@@ -50,5 +53,19 @@ tasks.test {
 
 tasks.jar {
     archiveBaseName.set("BlueMapMarumaSign")
+    archiveClassifier.set("thin")
 }
 
+// Kotlin の標準ライブラリは JAR に入れる。ほかの Kotlin 製プラグインと衝突しないよう、パッケージを移す
+tasks.shadowJar {
+    archiveBaseName.set("BlueMapMarumaSign")
+    archiveClassifier.set("")
+    relocate("kotlin", "net.torosaba.signmap.libs.kotlin")
+    relocate("org.jetbrains.annotations", "net.torosaba.signmap.libs.annotations")
+    relocate("org.intellij.lang.annotations", "net.torosaba.signmap.libs.intellij")
+    minimize()
+}
+
+tasks.assemble {
+    dependsOn(tasks.shadowJar)
+}
