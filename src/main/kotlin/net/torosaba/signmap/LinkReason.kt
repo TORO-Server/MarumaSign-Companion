@@ -1,10 +1,10 @@
-package net.torosaba.signmap;
+package net.torosaba.signmap
 
 /**
  * リンクの状態の理由 (固定の分類)。例外の文や応答の中身は持たない。
  * publicLabel は公開の地図に出す粗い言い方 (接続の失敗の種類を細かく出すと、ポートの探索に使われうるため、まとめてある)。
  */
-public enum LinkReason {
+enum class LinkReason(@JvmField val publicLabel: String) {
     OK("正常"),
     HTTP_404("404 見つからない"),
     HTTP_410("410 削除済み"),
@@ -23,10 +23,4 @@ public enum LinkReason {
     SERVER_ERROR("サーバーエラー"),
     UNEXPECTED_RESPONSE("想定外の応答"),
     UNSAFE_URL("検査できないURL");
-
-    public final String publicLabel;
-
-    LinkReason(String publicLabel) {
-        this.publicLabel = publicLabel;
-    }
 }
