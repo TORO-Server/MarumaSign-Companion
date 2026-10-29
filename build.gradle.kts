@@ -24,6 +24,8 @@ dependencies {
     compileOnly("us.dynmap:DynmapCoreAPI:3.8") { isTransitive = false }
     compileOnly("com.google.code.gson:gson:2.11.0")
 
+    testImplementation("io.papermc.paper:paper-api:26.3.build.227-stable")
+    testImplementation("us.dynmap:DynmapCoreAPI:3.8") { isTransitive = false }
     testImplementation("com.google.code.gson:gson:2.11.0")
     testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.11.4")

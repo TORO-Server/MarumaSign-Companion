@@ -66,6 +66,20 @@ public final class SignMapPlugin extends JavaPlugin {
             g.start();
             hostGuard = g;
         }
+        if (settings.link.enabled) {
+            final UrlFilter filter = new UrlFilter(settings.blockedHosts);
+            for (String bad : new AddressDenyList(settings.link.extraBlockedAddresses).rejected()) {
+                getLogger().warning("link-check.extra-blocked-addresses: ignoring an entry that is not an address or range: " + SafeText.logUrl(bad));
+            }
+            final HostThrottle throttle = new HostThrottle(settings.link);
+            final LinkProbe probe = LinkProbe.create(settings.link, filter, throttle);
+            final LinkChecker checker = new LinkChecker(getLogger(), getDataFolder().toPath().resolve("linkcheck.json"), settings.link,
+                    url -> probe.strictParse(url) != null, probe.asProber(), throttle, System::currentTimeMillis, this::linkStateChanged);
+            checker.start();
+            linkChecker = checker;
+            getLogger().info("Link check is on: the server will connect to URLs written on signs (see link-check in config.yml); first check starts in "
+                    + settings.link.startupDelayMinutes + " min");
+        }
         if (settings.resolveShortLinks) {
             final ShortLinkResolver r = new ShortLinkResolver(getLogger(), new UrlFilter(settings.blockedHosts), settings.shortLinkHosts,
                     getDataFolder().toPath().resolve("shortlinks.json"), this::refreshMarkers);
@@ -128,6 +142,9 @@ public final class SignMapPlugin extends JavaPlugin {
             }
         }
         backends.clear();
+        final LinkChecker checker = linkChecker;
+        linkChecker = null;
+        if (checker != null) checker.stop();
         final ShortLinkResolver r = resolver;
         resolver = null;
         if (r != null) r.stop();
@@ -144,12 +161,13 @@ public final class SignMapPlugin extends JavaPlugin {
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
-        if (!sender.hasPermission("bluemapmarumasign.admin")) {
+        if (!sender.hasPermission(AdminCommands.PERMISSION)) {
             sender.sendMessage("You do not have permission.");
             return true;
         }
         final String sub = args.length > 0 ? args[0].toLowerCase() : "status";
         switch (sub) {
+            case "broken", "linkstatus", "recheck" -> admin.handle(sender, sub, args);
             case "reload" -> {
                 reloadConfig();
                 loadSettings();
@@ -178,9 +196,19 @@ public final class SignMapPlugin extends JavaPlugin {
         return true;
     }
 
+    @Override
+    public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
+        if (!sender.hasPermission(AdminCommands.PERMISSION)) return List.of();
+        return admin.complete(args);
+    }
+
+    private final AdminCommands admin = new AdminCommands(this);
+
     private void loadSettings() {
         final FileConfiguration c = getConfig();
         final Settings s = new Settings();
+        s.dynmapShowOk = c.getBoolean("dynmap.show-ok", s.dynmapShowOk);
+        s.link = readLinkSettings(c);
         s.maxMarkers = Math.max(0, c.getInt("max-markers", s.maxMarkers));
         final List<String> ext = c.getStringList("allowed-extensions");
         if (!ext.isEmpty()) s.allowedExtensions = Settings.normalizeExtensions(ext);
@@ -215,6 +243,94 @@ public final class SignMapPlugin extends JavaPlugin {
         this.markerHtml = new MarkerHtml(filter, s);
         final ShortLinkResolver r = resolver;
         if (r != null) r.setHosts(s.shortLinkHosts);
+    }
+
+    /** config.yml の link-check を読む。値の範囲は収める (不正な値で検査が暴走しないように) */
+    static LinkSettings readLinkSettings(org.bukkit.configuration.ConfigurationSection c) {
+        final LinkSettings l = new LinkSettings();
+        l.enabled = c.getBoolean("link-check.enabled", l.enabled);
+        l.concurrency = LinkSettings.clamp(c.getInt("link-check.concurrency", l.concurrency), 1, 4);
+        l.startupDelayMinutes = LinkSettings.clamp(c.getInt("link-check.startup-delay-minutes", l.startupDelayMinutes), 0, 1440);
+        l.perHourLimit = LinkSettings.clamp(c.getInt("link-check.per-hour-limit", l.perHourLimit), 1, 100_000);
+        l.hostPerHourLimit = LinkSettings.clamp(c.getInt("link-check.host-per-hour-limit", l.hostPerHourLimit), 1, 10_000);
+        l.hostMinIntervalSeconds = LinkSettings.clamp(c.getInt("link-check.host-min-interval-seconds", l.hostMinIntervalSeconds), 0, 3600);
+        l.connectTimeoutSeconds = LinkSettings.clamp(c.getInt("link-check.timeouts.connect-seconds", l.connectTimeoutSeconds), 1, 30);
+        l.totalTimeoutSeconds = LinkSettings.clamp(c.getInt("link-check.timeouts.total-seconds", l.totalTimeoutSeconds), 2, 120);
+        l.maxBodyKb = LinkSettings.clamp(c.getInt("link-check.max-body-kb", l.maxBodyKb), 1, 256);
+        l.maxRedirects = LinkSettings.clamp(c.getInt("link-check.max-redirects", l.maxRedirects), 0, 10);
+        l.recheckOkDays = LinkSettings.clamp(c.getInt("link-check.recheck-ok-days", l.recheckOkDays), 1, 365);
+        l.recheckBrokenHours = LinkSettings.clamp(c.getInt("link-check.recheck-broken-hours", l.recheckBrokenHours), 1, 720);
+        final List<Integer> backoff = new ArrayList<>();
+        for (Integer h : c.getIntegerList("link-check.unknown-backoff-hours")) backoff.add(LinkSettings.clamp(h, 1, 720));
+        if (!backoff.isEmpty()) l.unknownBackoffHours = backoff;
+        l.brokenAfterFailures = LinkSettings.clamp(c.getInt("link-check.broken-after-failures", l.brokenAfterFailures), 1, 20);
+        l.brokenAfterHours = LinkSettings.clamp(c.getInt("link-check.broken-after-hours", l.brokenAfterHours), 0, 720);
+        l.treat403AsBroken = c.getBoolean("link-check.treat-403-as-broken", l.treat403AsBroken);
+        l.maxTrackedUrls = LinkSettings.clamp(c.getInt("link-check.max-tracked-urls", l.maxTrackedUrls), 100, 200_000);
+        l.userAgent = LinkSettings.cleanUserAgent(c.getString("link-check.user-agent", l.userAgent));
+        for (String a : c.getStringList("link-check.extra-blocked-addresses")) {
+            if (a != null && a.length() <= 64) l.extraBlockedAddresses.add(a.trim());
+        }
+        if (c.contains("link-check.host-rules")) {
+            final List<LinkSettings.HostRule> rules = new ArrayList<>();
+            for (java.util.Map<?, ?> m : c.getMapList("link-check.host-rules")) {
+                final Object host = m.get("host");
+                if (host == null) continue;
+                final String h = host.toString().trim().toLowerCase(java.util.Locale.ROOT);
+                if (!h.matches("[a-z0-9.-]{1,253}")) continue;
+                int interval = 0;
+                if (m.get("min-interval-seconds") instanceof Number n) interval = LinkSettings.clamp(n.intValue(), 0, 3600);
+                final List<String> paths = new ArrayList<>();
+                if (m.get("removed-paths") instanceof List<?> list) {
+                    for (Object o : list) {
+                        final String p = String.valueOf(o);
+                        if (p.matches("/[A-Za-z0-9._~/-]{0,199}")) paths.add(p);
+                    }
+                }
+                rules.add(new LinkSettings.HostRule(h, interval, paths));
+            }
+            l.hostRules = rules;
+        }
+        return l;
+    }
+
+    private volatile LinkChecker linkChecker;
+
+    LinkChecker linkChecker() {
+        return linkChecker;
+    }
+
+    // 検査の結果が変わったら、まとめて (10 秒に 1 回まで) 地図に反映する
+    private final AtomicBoolean linkRefreshPending = new AtomicBoolean();
+
+    private void linkStateChanged() {
+        final ScheduledExecutorService s = scheduler;
+        if (s == null || shuttingDown || !linkRefreshPending.compareAndSet(false, true)) return;
+        try {
+            s.schedule(() -> {
+                linkRefreshPending.set(false);
+                for (MapBackend b : backends) {
+                    try {
+                        b.linkStateChanged();
+                    } catch (RuntimeException e) {
+                        getLogger().warning(b.name() + " link state update failed: " + e.getClass().getSimpleName());
+                    }
+                }
+            }, 10, TimeUnit.SECONDS);
+        } catch (RuntimeException e) {
+            linkRefreshPending.set(false);
+        }
+    }
+
+    /** いま看板にあるすべての URL を、検査の対象として知らせる */
+    private void trackLinks() {
+        final LinkChecker checker = linkChecker;
+        if (checker == null) return;
+        final java.util.Set<String> urls = new java.util.HashSet<>();
+        for (WorldState w : worlds.values()) {
+            for (SignRecord s : w.store.all()) urls.add(s.url());
+        }
+        checker.track(urls);
     }
 
     private volatile ShortLinkResolver resolver;
@@ -277,6 +393,11 @@ public final class SignMapPlugin extends JavaPlugin {
 
     WorldState worldState(String name) {
         return worlds.get(name);
+    }
+
+    /** 走査しているワールドの一覧 (名前 → 状態) */
+    Map<String, WorldState> worldStates() {
+        return new java.util.TreeMap<>(worlds);
     }
 
     private static String safeName(String name) {
@@ -404,6 +525,7 @@ public final class SignMapPlugin extends JavaPlugin {
     }
 
     void refreshMarkers() {
+        trackLinks();
         for (MapBackend b : backends) {
             try {
                 b.refresh();
@@ -424,6 +546,8 @@ public final class SignMapPlugin extends JavaPlugin {
         }
         final SignRecord record = new SignRecord(x, y, z, spec.url(), spec.values(), orient);
         w.store.liveSet(record);
+        final LinkChecker checker = linkChecker;
+        if (checker != null) checker.prioritize(record.url());
         final MarkerHtml.View view = classify(record);
         final String worldName = world.getName();
         runLive(() -> {

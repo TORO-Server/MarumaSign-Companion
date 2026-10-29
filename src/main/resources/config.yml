@@ -13,9 +13,14 @@ dynmap:
   enabled: true
   # Dynmap に出すワールド。空なら、Dynmap が地図を作る (worlds.txt で有効な) 読み込み済みのワールドすべて
   worlds: []
+  # Dynmap の目的は、リンク切れの看板を見つけて直すこと。レイヤーは次の 3 つ (link-check が有効なとき):
+  #   「MarumaSign リンク切れ」「MarumaSign 要確認」 と、show-ok が true のときだけ「MarumaSign 正常」。
   # 最初から隠しておく (Dynmap の画面の右上のレイヤーメニューでオンにする)。
-  # オンにしても、地図に出るのは看板のアイコンだけで、マウスを乗せると名前、クリックすると中身 (画像やリンク) が開く
+  # オンにしても、地図に出るのはアイコンだけで、マウスを乗せると短い説明、クリックすると詳しい説明が開く。
+  # link-check が無効なときは、従来どおり 1 つのレイヤー「MarumaSign」に全部出す。
   default-hidden: true
+  # 「正常」のレイヤー (画像のサムネイル付き。件数が多くて重い) も作るか
+  show-ok: false
 
 # 1 つの地図 (Dynmap ではワールド) に出すマーカーの最大数 (超えた分は出しません)
 max-markers: 5000
@@ -105,6 +110,58 @@ allow-no-extension: true
 #   http / https 以外、localhost、127.x、10.x、172.16-31.x、192.168.x、169.254.x、100.64/10、
 #   *.local / *.internal / *.lan / *.home.arpa、ドットのない名前、ブラウザーがつながない番号のポート
 blocked-hosts: []
+
+# リンク切れの検査。**サーバーが看板に書かれた URL へ、HEAD / GET で接続します** (プレイヤーが好きな URL を書けるので、
+# 次の安全策をとっています。それでも、サーバーのアドレスが看板の URL の先のサイトに見えることは避けられません。不要なら enabled: false)。
+#  - 接続するのは、名前を引いた全アドレスが公開アドレスのときだけ。検証したアドレスにだけつなぐ (DNS rebinding 対策)。転送も毎回やり直す
+#  - 内部・予約済みのアドレス、80/443/8080/8443 以外のポート、ユーザー情報つきの URL は検査しない
+#  - TLS の検証は緩めない。Cookie・認証・Referer は送らない。本文は 64 KB まで読んで捨てる。全体に期限がある
+#  - 同時に検査するのは少数、同じホストには間隔を空け、全体・ホストごとの 1 時間あたりの上限がある
+# 判定: 404/410・名前が引けない・接続拒否・証明書エラー・画像でなく HTML が返る・削除済みの置き換え画像・転送ループは BROKEN。
+#       403 は「要確認」(ホットリンク対策のことがある)。タイムアウト・5xx は連続 3 回かつ 24 時間続いたときだけ BROKEN。
+link-check:
+  enabled: true
+  # 同時に検査する数 (1-4)
+  concurrency: 2
+  # 起動してから検査を始めるまでの時間 (分。region の走査と重ならないように)
+  startup-delay-minutes: 5
+  # 全体の 1 時間あたりの検査の上限
+  per-hour-limit: 600
+  # 1 つのホストの 1 時間あたりの検査の上限 (看板を大量に作って、1 つのサイトに検査を集中させる攻撃を防ぐ)
+  host-per-hour-limit: 60
+  # 同じホストへの検査の間隔 (秒。少しゆらぎが入る)
+  host-min-interval-seconds: 2
+  timeouts:
+    connect-seconds: 5
+    total-seconds: 20
+  # 本文を読む上限 (KB)。読んだら捨てる
+  max-body-kb: 64
+  max-redirects: 5
+  recheck-ok-days: 7
+  recheck-broken-hours: 24
+  # UNKNOWN の再検査の間隔 (時間)。連続して失敗するほど長くなる
+  unknown-backoff-hours: [6, 12, 24]
+  # 一時的な失敗が、この回数・この時間 (最初の失敗から) 続いたら BROKEN にする
+  broken-after-failures: 3
+  broken-after-hours: 24
+  # 403 を BROKEN にするか (false: 「要確認」)
+  treat-403-as-broken: false
+  # 追跡する URL の上限 (超えたら古い未検査から落とす)
+  max-tracked-urls: 20000
+  # 公開のアドレスに見えても、つながないアドレス・範囲 (「203.0.113.7」「198.51.100.0/24」「2001:db8::/32」)。
+  # **サーバー自身の公開アドレスを書いてください**: 自分の公開アドレスへの接続は、同じ機械の中を通って、外から守られているはずのサービス
+  # (管理画面など) に届くことがあります (Docker などで、プラグインから自分の公開アドレスが見えない場合は、これで除きます)。
+  # サイトごとの NAT64 の範囲なども、ここに足せます。内部のアドレス (10/8 など) は、書かなくても常に除きます。
+  extra-blocked-addresses: []
+  # 送る User-Agent (印字できる ASCII だけ)
+  user-agent: BlueMapMarumaSign-LinkCheck/1.0
+  # ホストごとの決まり (そのホストと下のサブドメイン)。min-interval-seconds は間隔を長くする。
+  # removed-paths: 削除済みを 200 で返す置き換え画像のパス (そこへ転送されたら BROKEN)
+  host-rules:
+    - host: imgur.com
+      min-interval-seconds: 5
+      removed-paths:
+        - /removed.png
 
 # セキュリティ
 security:

@@ -177,44 +177,7 @@ public final class HostGuard {
         }
     }
 
-    /** インターネット上の公開アドレスなら true (ループバック、家庭内・社内、リンクローカル、予約済みなどは false) */
+    /** インターネット上の公開アドレスなら true ({@link AddressPolicy}) */
     public static boolean isPublicAddress(InetAddress a) {
-        if (a.isAnyLocalAddress() || a.isLoopbackAddress() || a.isLinkLocalAddress() || a.isSiteLocalAddress() || a.isMulticastAddress()) {
-            return false;
-        }
-        final byte[] b = a.getAddress();
-        if (b.length == 4) return isPublicIpv4(b);
-        if (b.length == 16) {
-            final int b0 = b[0] & 0xFF, b1 = b[1] & 0xFF;
-            if ((b0 & 0xFE) == 0xFC) return false; // fc00::/7 (ULA)
-            if (b0 == 0xFE && (b1 & 0xC0) == 0x80) return false; // fe80::/10
-            if (b0 == 0xFE && (b1 & 0xC0) == 0xC0) return false; // fec0::/10 (旧 site-local)
-            if (b0 == 0x20 && b1 == 0x01 && b[2] == 0x0D && (b[3] & 0xFF) == 0xB8) return false; // 2001:db8::/32 (文書用)
-            if (b0 == 0x20 && b1 == 0x02) return false; // 6to4 (中に IPv4 を埋め込める)
-            if (b0 == 0x00 && b1 == 0x64 && (b[2] & 0xFF) == 0xFF && (b[3] & 0xFF) == 0x9B) return false; // 64:ff9b::/96 (NAT64)
-            if (b0 == 0x01 && b1 == 0x00) return false; // 100::/64 (破棄用)
-            boolean zeros = true;
-            for (int i = 0; i < 10; i++) if (b[i] != 0) zeros = false;
-            if (zeros) {
-                // ::/80 の下 (IPv4 互換、IPv4 射影)
-                return false;
-            }
-            return true;
-        }
-        return false;
-    }
-
-    private static boolean isPublicIpv4(byte[] b) {
-        final int a = b[0] & 0xFF, c = b[1] & 0xFF, d = b[2] & 0xFF;
-        if (a == 0 || a == 10 || a == 127) return false;
-        if (a == 100 && (c & 0xC0) == 64) return false; // 100.64.0.0/10
-        if (a == 169 && c == 254) return false;
-        if (a == 172 && (c & 0xF0) == 16) return false;
-        if (a == 192 && c == 168) return false;
-        if (a == 192 && c == 0 && (d == 0 || d == 2)) return false; // 192.0.0.0/24, 192.0.2.0/24
-        if (a == 198 && (c == 18 || c == 19)) return false; // 198.18.0.0/15
-        if (a == 198 && c == 51 && d == 100) return false;
-        if (a == 203 && c == 0 && d == 113) return false;
-        return a < 224; // 224 以上は マルチキャストと予約済み
-    }
-}
+        return AddressPolicy.isPublic(a);
+    }}

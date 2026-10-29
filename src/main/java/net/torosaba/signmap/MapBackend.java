@@ -17,4 +17,8 @@ interface MapBackend {
     void signUpdated(String worldName, SignRecord sign, MarkerHtml.View view);
 
     void signRemoved(String worldName, int x, int y, int z);
+
+    /** リンクの検査の結果が変わった (結果を使う地図だけが、マーカーを更新する) */
+    default void linkStateChanged() {
+    }
 }

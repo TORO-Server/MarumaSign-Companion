@@ -21,6 +21,10 @@ public final class Settings {
     public double maxDistance = 600;
     public boolean defaultHidden = false;
     public boolean dynmapDefaultHidden = true;
+    /** Dynmap に「正常」のレイヤー (サムネイル付き) も作るか。件数が多くて重いので、既定は作らない */
+    public boolean dynmapShowOk = false;
+    /** リンク切れの検査 (サーバーが看板の URL へ HEAD / GET で接続する) */
+    public LinkSettings link = new LinkSettings();
     public String markerSetLabel = "MarumaSign";
 
     /** BlueMap での出し方: "3d" (画像を 3D の空間に置く)、"markers" (HTML マーカー)、"both" */
