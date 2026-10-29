@@ -77,6 +77,33 @@ assert.ok(m.shorten("https://example.com/" + "a".repeat(200), 36).length <= 36);
 
 // ---- MarumaSign 本体 (SignImage.java) との突き合わせ ----
 const ref = process.argv[2] || path.join(__dirname, "reference-mesh.json");
+// ---- 看板の板を消す ----
+{
+    // タイルの位置 (-30, 0, -2014)。看板はブロック (-28, 69, -2010) = タイルの中では (2, 69, 4)
+    const cells = new Set([m.blockKey(-28, 69, -2010)]);
+    const tri = (...p) => p;
+    const positions = new Float32Array([
+        // 看板の板 (ブロックの中): 消す
+        ...tri(2.1, 69.5, 4.875, 2.9, 69.5, 4.875, 2.9, 69.9, 4.875),
+        // 地面の上面 (ブロックの下の境界 y=69 に乗る): 残す
+        ...tri(2, 69, 4, 3, 69, 4, 3, 69, 5),
+        // 隣のブロックの側面 (x=2 の境界に乗る): 残す
+        ...tri(2, 69, 4, 2, 70, 4, 2, 70, 5),
+        // 看板でないブロックの中: 残す
+        ...tri(5.1, 69.5, 4.5, 5.9, 69.5, 4.5, 5.9, 69.9, 4.5),
+        // ブロックからはみ出す三角形: 残す
+        ...tri(1.5, 69.5, 4.5, 2.9, 69.5, 4.5, 2.9, 69.9, 4.5),
+    ]);
+    const before = Array.from(positions);
+    assert.strictEqual(m.hideBoards(positions, -30, 0, -2014, cells), 1);
+    // 消した三角形は 1 点に潰れている
+    assert.deepStrictEqual(Array.from(positions.slice(0, 9)), [2.1, 69.5, 4.875, 2.1, 69.5, 4.875, 2.1, 69.5, 4.875].map(Math.fround));
+    assert.deepStrictEqual(Array.from(positions.slice(9)), before.slice(9), "ほかの三角形はそのまま");
+    // 2 回目は何もしない
+    assert.strictEqual(m.hideBoards(positions, -30, 0, -2014, cells), 0);
+    assert.strictEqual(m.hideBoards(new Float32Array(before), -30, 0, -2014, new Set()), 0, "看板がなければ何もしない");
+}
+
 if (ref && fs.existsSync(ref)) {
     const cases = JSON.parse(fs.readFileSync(ref, "utf8"));
     let worst = 0;

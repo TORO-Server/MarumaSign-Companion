@@ -357,6 +357,8 @@ class MarumaSignCompanion : JavaPlugin() {
         s.web3dDrawDistance = Math.max(16, Math.min(512, c.getInt("web3d.draw-distance", s.web3dDrawDistance)))
         s.web3dMaxActive = Math.max(10, Math.min(1000, c.getInt("web3d.max-active", s.web3dMaxActive)))
         s.web3dTextureSize = Math.max(64, Math.min(4096, c.getInt("web3d.texture-size", s.web3dTextureSize)))
+        s.web3dHideBoards = c.getBoolean("web3d.hide-sign-boards", s.web3dHideBoards)
+        s.web3dLabels = c.getBoolean("web3d.show-labels", s.web3dLabels)
         this.settings = s
         val filter = UrlFilter(s.blockedHosts)
         this.markerHtml = MarkerHtml(filter, s)

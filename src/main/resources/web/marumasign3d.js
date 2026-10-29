@@ -199,7 +199,64 @@
         return Math.min(cap, Math.min(512, 64 + Math.sqrt(maxSq) * 2));
     }
 
+    /** ブロックの位置のキー */
+    function blockKey(x, y, z) {
+        return x + "," + y + "," + z;
+    }
+
+    const BOARD_EPS = 1e-4;
+
+    /**
+     * 看板の板を消す (MarumaSign 本体が、ゲームの中で MarumaSign の看板の板を描かないのと同じ見え方にする)。
+     * BlueMap の高精細タイルは、インデックスなしの三角形の並び (ブロックの座標はタイルの位置からの相対)。
+     * 看板のブロック (1×1×1) の中にある三角形を、1 点に潰して見えなくする。
+     * ブロックの境界の面にぴったり乗る三角形 (地面の上面・隣のブロックの側面など) は、看板のものではないので残す。
+     * @param positions {Float32Array} 頂点の位置 (x, y, z の並び。3 頂点で 1 つの三角形)
+     * @param ox, oy, oz タイルの位置 (ブロック)
+     * @param cells {Set<string>} 看板のブロックの位置 (blockKey)
+     * @return 潰した三角形の数
+     */
+    function hideBoards(positions, ox, oy, oz, cells) {
+        let hidden = 0;
+        const a = positions;
+        for (let i = 0; i + 8 < a.length; i += 9) {
+            const bx = Math.floor((a[i] + a[i + 3] + a[i + 6]) / 3 + ox);
+            const by = Math.floor((a[i + 1] + a[i + 4] + a[i + 7]) / 3 + oy);
+            const bz = Math.floor((a[i + 2] + a[i + 5] + a[i + 8]) / 3 + oz);
+            if (!cells.has(blockKey(bx, by, bz))) continue;
+            // 6 つの境界の面 (x=0, x=1, y=0, y=1, z=0, z=1) のどれかに 3 点とも乗っているか
+            let inside = true;
+            let planes = 63;
+            for (let k = 0; k < 9; k += 3) {
+                const x = a[i + k] + ox - bx, y = a[i + k + 1] + oy - by, z = a[i + k + 2] + oz - bz;
+                if (x < -BOARD_EPS || x > 1 + BOARD_EPS || y < -BOARD_EPS || y > 1 + BOARD_EPS || z < -BOARD_EPS || z > 1 + BOARD_EPS) {
+                    inside = false;
+                    break;
+                }
+                let on = 0;
+                if (Math.abs(x) < BOARD_EPS) on |= 1;
+                if (Math.abs(x - 1) < BOARD_EPS) on |= 2;
+                if (Math.abs(y) < BOARD_EPS) on |= 4;
+                if (Math.abs(y - 1) < BOARD_EPS) on |= 8;
+                if (Math.abs(z) < BOARD_EPS) on |= 16;
+                if (Math.abs(z - 1) < BOARD_EPS) on |= 32;
+                planes &= on;
+            }
+            if (!inside || planes !== 0) continue;
+            if (a[i] === a[i + 3] && a[i] === a[i + 6] && a[i + 1] === a[i + 4] && a[i + 1] === a[i + 7]
+                && a[i + 2] === a[i + 5] && a[i + 2] === a[i + 8]) continue; // もう潰してある
+            for (let k = 3; k < 9; k += 3) {
+                a[i + k] = a[i];
+                a[i + k + 1] = a[i + 1];
+                a[i + k + 2] = a[i + 2];
+            }
+            hidden++;
+        }
+        return hidden;
+    }
+
     const EXPORTS = {
+        hideBoards: hideBoards, blockKey: blockKey,
         safeUrl: safeUrl, parseSign: parseSign, buildMesh: buildMesh, rotatePoint: rotatePoint, viewDistance: viewDistance,
         displayHost: displayHost, shorten: shorten, signYaw: signYaw, isWall: isWall, clamp: clamp,
         IMAGE_TYPES: IMAGE_TYPES, MAX_IMAGE_BYTES: MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS: MAX_IMAGE_PIXELS
@@ -230,6 +287,7 @@
     let kinds = [];
     let signs = [];
     let grid = new Map();
+    let boardCells = new Set(); // 看板のブロックの位置 (板を消す)
     let mapId = null;
     let lastText = null;
     let lastCamera = null;
@@ -287,6 +345,9 @@
             drawDistance: num(json.drawDistance, 192, 16, 512),
             maxActive: num(json.maxActive, 200, 10, 1000),
             textureSize: num(json.textureSize, 1024, 64, 4096),
+            // 古いプラグインのデータには無いので、そのときは従来どおり (板は残し、ラベルは出す)
+            hideBoards: json.hideBoards === true,
+            labels: json.labels !== false,
             limits: limits
         };
         kinds = json.kinds.map(function (k) {
@@ -301,14 +362,38 @@
         mapId = id;
         signs = parsed;
         grid = new Map();
+        boardCells = new Set();
         for (const s of signs) {
             s.cap = viewDistance(s, settings.drawDistance);
             const key = cellKey(Math.floor(s.x / CELL), Math.floor(s.z / CELL));
             let list = grid.get(key);
             if (!list) grid.set(key, list = []);
             list.push(s);
+            boardCells.add(blockKey(s.x, s.y, s.z));
         }
         dirty = true;
+        hideBoardsInLoadedTiles();
+    }
+
+    // ---- 看板の板を消す (BlueMap が描いた地形のうち、看板のブロックの中の面)
+
+    function hideBoardsInTile(tile) {
+        if (!enabled || !settings || !settings.hideBoards || boardCells.size === 0) return;
+        const model = tile && tile.model;
+        const geometry = model && model.geometry;
+        const position = geometry && geometry.attributes && geometry.attributes.position;
+        if (!position || !position.array || geometry.index) return;
+        if (hideBoards(position.array, model.position.x, model.position.y, model.position.z, boardCells) > 0) {
+            position.needsUpdate = true;
+            redraw();
+        }
+    }
+
+    function hideBoardsInLoadedTiles() {
+        const map = app && app.mapViewer && app.mapViewer.map;
+        const tiles = map && map.hiresTileManager && map.hiresTileManager.tiles;
+        if (!tiles || typeof tiles.values !== "function") return;
+        for (const tile of tiles.values()) hideBoardsInTile(tile);
     }
 
     function cellKey(cx, cz) {
@@ -319,6 +404,7 @@
         for (const s of Array.from(active.keys())) deactivate(s);
         signs = [];
         grid = new Map();
+        boardCells = new Set();
         mapId = null;
         lastText = null;
         redraw();
@@ -494,6 +580,7 @@
     }
 
     function addLabel(entry, s) {
+        if (!settings || !settings.labels) return;
         if (entry.label || entry.mesh || !app || !T) return;
         const CSS2D = window.BlueMap && window.BlueMap.CSS2DObject;
         if (typeof CSS2D !== "function") return;
@@ -657,6 +744,11 @@
             attach();
             clearSigns();
             loadData();
+        });
+        // 高精細タイルが読み込まれるたびに、その中の看板の板を消す
+        app.events.addEventListener("bluemapMapTileLoaded", function (ev) {
+            const d = ev && ev.detail;
+            if (d && d.layer === "hires") hideBoardsInTile(d.tile);
         });
         document.addEventListener("keydown", function (ev) {
             if (ev.key === "Escape") closeInfo();

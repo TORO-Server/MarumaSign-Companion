@@ -62,6 +62,8 @@ internal object WebExporter {
                 w.name("drawDistance").value(settings.web3dDrawDistance.toLong())
                 w.name("maxActive").value(settings.web3dMaxActive.toLong())
                 w.name("textureSize").value(settings.web3dTextureSize.toLong())
+                w.name("hideBoards").value(settings.web3dHideBoards)
+                w.name("labels").value(settings.web3dLabels)
                 w.name("kinds").beginArray()
                 for (k in MediaKind.values()) {
                     w.beginArray().value(k.icon).value(k.label).endArray()

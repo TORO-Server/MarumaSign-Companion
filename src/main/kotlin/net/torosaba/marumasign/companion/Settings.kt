@@ -41,6 +41,10 @@ class Settings {
     var web3dDrawDistance = 192
     var web3dMaxActive = 200
     var web3dTextureSize = 1024
+    /** 看板の板 (看板ブロックそのもの) を地図から消す */
+    var web3dHideBoards = true
+    /** 画像にできない看板に、種類と URL のラベルを出す */
+    var web3dLabels = false
 
     fun bluemap3d(): Boolean = bluemapMode != "markers"
 
