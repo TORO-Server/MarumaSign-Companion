@@ -1,1 +1,1 @@
-rootProject.name = "toro-bluemap-marumasign"
+rootProject.name = "marumasign-companion"

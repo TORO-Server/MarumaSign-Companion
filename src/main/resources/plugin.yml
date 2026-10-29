@@ -1,20 +1,26 @@
-name: BlueMapMarumaSign
+name: MarumaSignCompanion
 version: '${version}'
-main: net.torosaba.signmap.SignMapPlugin
+main: net.torosaba.marumasign.companion.MarumaSignCompanion
 api-version: '1.21'
-description: Shows MarumaSign signs on BlueMap (3D) and Dynmap (broken links), and checks the links
+description: Companion for servers using MarumaSign - indexes the signs, checks and hosts their links, and shows them on BlueMap (3D) and Dynmap
 softdepend: [BlueMap, dynmap]
 commands:
-  marumasignmap:
-    description: Status, rescan, reload and broken link tools for the MarumaSign maps
-    usage: /marumasignmap [status|rescan|reload|broken [page]|linkstatus|recheck <URL|all-broken>]
-    permission: marumasignmap.admin
+  marumasign:
+    description: Status, rescan, reload, broken link and hosting tools for MarumaSign signs
+    usage: /marumasign [status|rescan|reload|broken [page]|linkstatus|recheck <URL|all-broken>|hosting [status|list [page]|remove <id>]]
+    permission: marumasign.admin
+    aliases: [marumasignmap]
 permissions:
-  marumasignmap.admin:
-    description: Use /marumasignmap
+  marumasign.admin:
+    description: Use /marumasign
     default: op
-  bluemapmarumasign.admin:
-    description: Old name of marumasignmap.admin (still accepted)
+  marumasignmap.admin:
+    description: Old name of marumasign.admin (still accepted)
     default: op
     children:
-      marumasignmap.admin: true
+      marumasign.admin: true
+  bluemapmarumasign.admin:
+    description: Old name of marumasign.admin (still accepted)
+    default: op
+    children:
+      marumasign.admin: true

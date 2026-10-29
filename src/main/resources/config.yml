@@ -1,5 +1,6 @@
-# BlueMapMarumaSign の設定
-# MarumaSign 形式の看板 (URL|X|Y|Z|横幅|高さ|Z回転|Y回転|X回転) を BlueMap のマーカーとして出します。
+# MarumaSignCompanion の設定
+# MarumaSign 形式の看板 (URL|X|Y|Z|横幅|高さ|Z回転|Y回転|X回転) を一覧にして、リンクを検査し、ホストし、BlueMap / Dynmap に出します。
+# BlueMap / Dynmap がなくても、看板の一覧・リンクの検査・ホストは動きます。
 
 # 地図ごとに出すかどうか (プラグインが入っていなければ、true でも何もしません)
 bluemap:
@@ -154,7 +155,7 @@ link-check:
   # サイトごとの NAT64 の範囲なども、ここに足せます。内部のアドレス (10/8 など) は、書かなくても常に除きます。
   extra-blocked-addresses: []
   # 送る User-Agent (印字できる ASCII だけ)
-  user-agent: BlueMapMarumaSign-LinkCheck/1.0
+  user-agent: MarumaSignCompanion-LinkCheck/1.0
   # ホストごとの決まり (そのホストと下のサブドメイン)。min-interval-seconds は間隔を長くする。
   # removed-paths: 削除済みを 200 で返す置き換え画像のパス (そこへ転送されたら BROKEN)
   host-rules:
@@ -172,7 +173,7 @@ security:
 
 # 短縮 URL (is.gd など) は、3D 表示でブラウザーが直接画像を読めるように、サーバーで行き先を調べます。
 # つなぐのは下のホストだけで、HEAD で転送先 (Location) を読むだけです。転送は自動で追わず、行き先のサーバーにはつなぎません。
-# 行き先は URL の確認 (上の規則) を通ったものだけ使います。結果は plugins/BlueMapMarumaSign/shortlinks.json に保存します。
+# 行き先は URL の確認 (上の規則) を通ったものだけ使います。結果は plugins/MarumaSignCompanion/shortlinks.json に保存します。
 short-links:
   resolve: true
   hosts:
@@ -194,7 +195,41 @@ web3d:
   max-size: 64
   max-offset: 64
 
+# 看板の URL の中身をサーバーでホストして、看板の URL をホスト先に書き換えます (既定は無効)。
+#  - リンクの検査 (link-check) で正常だった URL が、verify-after-hours 以上たってから、もう一度読み込めたらホストします
+#  - ライブ配信・分割配信 (m3u8 / mpd / Icecast / MJPEG など)、別のファイルを読む形式 (.gltf)、HTML、大きすぎるものはホストしません
+#  - ホストしたら、その URL の看板の文字を、ホスト先の URL に書き換えます (URL より後ろの数値はそのまま。看板を読み込ませることはせず、
+#    チャンクが読み込まれたときに書き換えます)。看板を書いた人の URL は hosting.json に残り、取り下げたときに戻します
+#  - どの看板にも使われなくなってから unhost-after-days たったファイルは、ホストをやめて消します
+#  - 管理者は /marumasign hosting remove <id> で取り下げられます (元の URL はもうホストせず、看板は元の URL に戻します)
+# 公開するには、内蔵の Web サーバー (port) の前に HTTPS の逆プロキシ (Cloudflare Tunnel や nginx) を置き、そのアドレスを public-base-url にします。
+# 外の Web サーバーに配らせるときは、port: 0 にして、directory をその Web サーバーの公開フォルダにします。
+hosting:
+  enabled: false
+  # 看板に書く URL の頭 (例 https://signs.example.net)。看板は文字数が限られるので短く (100 文字まで)。http(s) で、? # @ を含まない
+  public-base-url: ""
+  # ファイルを置くフォルダ (空ならこのプラグインのフォルダの hosted)
+  directory: ""
+  # 内蔵の Web サーバー。0 なら使わない
+  bind: 0.0.0.0
+  port: 8110
+  # 正常と確かめてから、ホストするまでの時間 (時間)
+  verify-after-hours: 24
+  # どの看板にも使われなくなってから、ホストをやめるまでの日数
+  unhost-after-days: 14
+  # 1 つのファイルの上限と、全体の上限 (MB)
+  max-file-mb: 32
+  max-total-mb: 4096
+  # 1 つのファイルを読み込む時間の上限 (秒)
+  download-timeout-seconds: 120
+  # 1 時間あたりに読み込む数の上限
+  per-hour-limit: 30
+  # ホストしないホスト (そのホストと、その下のサブドメイン)
+  exclude-hosts: []
+
 scan:
+  # 看板を調べるワールド。空なら、読み込まれたワールドすべて (BlueMap / Dynmap が地図にするワールドは、ここになくても調べます)
+  worlds: []
   # region ファイルを読むスレッドの数 (1-8)。増やすと速くなりますが、サーバーの負荷が上がります
   threads: 2
   # region ファイル 1 つを読むごとに空ける時間 (ミリ秒)

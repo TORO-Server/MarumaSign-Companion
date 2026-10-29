@@ -1,8 +1,19 @@
-# BlueMapMarumaSign
+# MarumaSignCompanion
 
-[MarumaSign](https://github.com/marumasa/MarumaSign) (クライアント側 Mod) の看板を、[BlueMap](https://bluemap.bluecolored.de/) の **3D マップに、MarumaSign 本体と同じ位置・大きさ・向きで画像として置く** Paper プラグインです。
-[Dynmap](https://github.com/webbukkit/dynmap) の地図には、**リンク切れの看板の発見**用に、検査の結果ごとのレイヤーで出します (サーバーが看板の URL へ接続して検査します。後述)。BlueMap と Dynmap は、どちらか一方だけ入っていても動きます
-(`softdepend`。`config.yml` の `bluemap.enabled` `dynmap.enabled` で地図ごとに切り替えられます)。TORO サーバー (Paper 26.3) の `3d-map` 用。**非公開リポジトリです。公開しないでください。**
+[MarumaSign](https://github.com/TORO-Server/MarumaSign) (クライアント側 Mod) を使うサーバーに **入れておくとよい** Paper プラグインです (Kotlin)。
+MarumaSign 自体はサーバーに何も要りませんが、看板の URL は外部のサイトにあるので、時間がたつとリンクが切れます。このプラグインは、サーバー側でそれを見守り、残します。
+
+- **看板の一覧**: ワールドの MarumaSign の看板を、region ファイルから読み取り専用で集めます。
+- **リンクの検査**: 看板の URL が生きているかを定期的に確かめ、リンク切れの看板を `/marumasign broken` で一覧にします (クリックでその看板へテレポート)。
+- **ホスト**: 正常な URL の中身をサーバーで写して配り、看板の URL をその写しに書き換えます (既定は無効。後述)。元のサイトが消えても、看板は見え続けます。
+- **地図**: [BlueMap](https://bluemap.bluecolored.de/) が入っていれば、3D の地図に看板の画像を、MarumaSign 本体と同じ位置・大きさ・向きで置きます。
+  [Dynmap](https://github.com/webbukkit/dynmap) が入っていれば、リンク切れの看板を検査の結果ごとのレイヤーで出します。
+
+地図のプラグインはどちらも任意です (`softdepend`。`config.yml` の `bluemap.enabled` `dynmap.enabled` で地図ごとに切り替えられます)。どちらもなくても、看板の一覧・リンクの検査・ホストは動きます。
+TORO サーバー (Paper 26.3) 用。**非公開リポジトリです。公開しないでください。**
+
+旧名は `BlueMapMarumaSign` です。初めて起動したとき、`plugins/BlueMapMarumaSign/` があれば、設定・キャッシュ・検査の結果を `plugins/MarumaSignCompanion/` に写します (旧フォルダは残すので、確認したら消してください)。
+コマンド `/marumasignmap` と権限 `marumasignmap.admin` `bluemapmarumasign.admin` も、引き続き使えます。
 
 MarumaSign はサーバーに Mod が要らず、看板の文字がデータです。看板の 4 行 (表と裏で 8 行) をつなげた文字列が
 
@@ -14,13 +25,13 @@ MarumaSign はサーバーに Mod が要らず、看板の文字がデータで�
 
 ## できること
 
-- BlueMap / Dynmap が有効になったとき、地図があるワールド (BlueMap は地図があるワールド、Dynmap は `worlds.txt` で有効な読み込み済みのワールド。`dynmap.worlds` で指定もできます) の **region ファイルを読み取り専用で走査** して、
+- 読み込まれたワールド (`scan.worlds` で絞れます。BlueMap が地図にするワールドと、Dynmap の `worlds.txt` で有効なワールドは、そこになくても調べます) の **region ファイルを読み取り専用で走査** して、
   看板の block entity と、その看板ブロックの向きだけを取り出します (チャンクは Bukkit で読み込みません。NBT は自前の読み飛ばし式のリーダーで、依存ライブラリはありません)。
-- 結果は `plugins/BlueMapMarumaSign/cache/<ワールド名>.json` に保存します。次からは **region ファイルの更新日時が変わったものだけ** 読み直します。
+- 結果は `plugins/MarumaSignCompanion/cache/<ワールド名>.json` に保存します。次からは **region ファイルの更新日時が変わったものだけ** 読み直します。
 - 走査は低い優先度のスレッド (既定 2 本) で、region ごとに間を空けます (既定 40 ms)。30 分ごとに、更新された region だけ再走査します。
 - ゲーム中の看板の編集 (`SignChangeEvent`)・破壊・爆破は、その場で反映します。まだ region ファイルに書かれていない変更は、再走査で消えません。
-- 走査の結果とキャッシュは BlueMap と Dynmap で共通です。
-- コマンド: `/marumasignmap [status|rescan|reload]` (権限 `bluemapmarumasign.admin`、既定は OP)。
+- 走査の結果とキャッシュは、リンクの検査・ホスト・BlueMap・Dynmap で共通です。
+- コマンド: `/marumasign [status|rescan|reload]` (権限 `marumasign.admin`、既定は OP)。リンク切れとホストのコマンドは後述。
 
 ### BlueMap: 3D 表示 (既定)
 
@@ -76,7 +87,7 @@ URL ごとに 1 回 (同じ URL の看板が複数あっても 1 回)。状態�
 | **UNKNOWN** (失敗に数えない) | 401 / 403 (ホットリンク対策のことがある。`treat-403-as-broken: true` で 403 を BROKEN に)。429 (そのホストを `Retry-After` のあいだ待たせる)。内部アドレスや、検査してはいけない URL への転送 (未検査)。検査できない URL |
 | **UNKNOWN** (失敗に数える) | タイムアウト、5xx、接続リセット、想定外の応答、転送が 5 回を超える。**連続 3 回かつ最初の失敗から 24 時間以上**続いたときだけ BROKEN |
 
-再検査: OK は 7 日ごと、BROKEN は 24 時間ごと (復活の検出)、UNKNOWN は 6 → 12 → 24 時間。新しい・編集された URL は先に検査します。結果は `plugins/BlueMapMarumaSign/linkcheck.json` に保存して、再起動後も引き継ぎます
+再検査: OK は 7 日ごと、BROKEN は 24 時間ごと (復活の検出)、UNKNOWN は 6 → 12 → 24 時間。新しい・編集された URL は先に検査します。結果は `plugins/MarumaSignCompanion/linkcheck.json` に保存して、再起動後も引き継ぎます
 (読むときは型と範囲を確かめ、壊れていれば `.corrupt-<時刻>` に退避して空から始めます)。
 
 ### 負荷の抑制
@@ -99,7 +110,7 @@ URL ごとに 1 回 (同じ URL の看板が複数あっても 1 回)。状態�
 | 資源の枯渇・低速攻撃 | ヘッダーの 1 行・行数・合計に上限。本文は 64 KB まで読んで捨てる。`Accept-Encoding` を送らず、圧縮は展開しない。全体の期限 (20 秒) で、小出しの応答を切る (**期限が来たらソケットを閉じる**ので、TLS のレコードを 1 バイトずつ送られても止まらない)。接続 5 秒。同時実行・ホスト別・全体の上限。名前を引く処理にも時間と同時数の上限 (枠が埋まったときは、こちらの失敗に数えず、あとでやり直す) |
 | 情報の漏えい | Cookie・認証・Referer・Origin を送らない。User-Agent は固定 (設定は印字できる ASCII だけ)。例外の文・応答のヘッダーや本文は、地図・チャット・ログに出さない (出すのは固定の分類名だけ) |
 | 公開の地図の悪用 | リンク切れの URL は**リンクにしない** (攻撃者の URL への入口にならない)。ホストとパスだけを出し、クエリ (署名つき URL のトークン) とユーザー情報は除く。制御文字・双方向制御文字 (U+202E など)・ゼロ幅文字は除く。HTML はすべてエスケープ。理由は粗い分類だけ (ポートの探索に使われない) |
-| 管理コマンドの悪用 | 権限 `marumasignmap.admin` (既定は OP。古い `bluemapmarumasign.admin` も使える)。チャットは `Component.text` で作る (MiniMessage などで解釈しない)。クリックは `SUGGEST_COMMAND` (`/tp ...`) だけで、`RUN_COMMAND` と `OPEN_URL` は使わない。引数は長さと文字を検証 |
+| 管理コマンドの悪用 | 権限 `marumasign.admin` (既定は OP。古い `marumasignmap.admin` `bluemapmarumasign.admin` も使える)。チャットは `Component.text` で作る (MiniMessage などで解釈しない)。クリックは、看板へのテレポート (サーバー側のコールバック。コマンドの文字列を作らず、クリックした人の権限を確かめる) と `SUGGEST_COMMAND` (`/tp ...`) だけで、`RUN_COMMAND` と `OPEN_URL` は使わない。引数は長さと文字を検証 |
 | ログの混入 | ログに出す URL はクエリ・ユーザー情報を除き、制御文字 (ESC・改行など) は `\uXXXX` にする |
 | 保存ファイルの改ざん | 読むときにサイズ・件数・型・範囲を確かめ、URL は今の規則でもう一度確認する。壊れていれば退避して空から。書くのは一時ファイル → 置き換え |
 
@@ -113,11 +124,61 @@ URL ごとに 1 回 (同じ URL の看板が複数あっても 1 回)。状態�
 **送信元のアドレスを固定する outbound プロキシ (`link-check.proxy`) は、入れていません。** プロキシには接続先の「名前」を渡すことになり、名前の解決と接続を**プロキシが**行うため、上の「検証したアドレスにだけつなぐ」を守れなくなります
 (SSRF の対策がプロキシの設定任せになる)。送信元を固定したい・内部へ出られないようにしたいときは、サーバーのコンテナ側で、送信を専用のネットワーク (NAT) に出して、プライベートアドレスへの通信をファイアウォールで拒否する形が確実です (多重の防御にもなります)。
 
-### 管理コマンド (権限 `marumasignmap.admin`)
+### 管理コマンド (権限 `marumasign.admin`)
 
-- `/marumasignmap broken [ページ]` リンク切れの看板を、期間の長い順に一覧 (座標をクリックすると `/tp` を入力欄に入れる。実行はしない)。
-- `/marumasignmap linkstatus` OK / BROKEN / UNKNOWN / PENDING の件数と、検査の進み具合。
-- `/marumasignmap recheck <URL|all-broken>` すぐ再検査。
+- `/marumasign broken [ページ]` リンク切れの看板を、期間の長い順に一覧。プレイヤーが座標をクリックすると、その看板へテレポートします
+  (サーバー側のクリックのコールバックで、クリックしたときにも権限を確かめます。1 時間で無効。コンソールでは `/tp` を入力欄に入れるだけ)。
+- `/marumasign linkstatus` OK / BROKEN / UNKNOWN / PENDING の件数と、検査の進み具合。
+- `/marumasign recheck <URL|all-broken>` すぐ再検査。
+
+## ホスト (看板の URL の写しをサーバーで配る)
+
+`hosting.enabled: true` と `hosting.public-base-url` で有効になります (既定は無効。`link-check.enabled` も必要)。
+
+1. リンクの検査で正常だった URL を候補にします。正常と確かめてから `verify-after-hours` (既定 24 時間) たち、もう一度読み込めたらホストします。
+2. 読み込みは、リンクの検査と同じ自前の HTTP クライアント (`SafeHttp`) です。検証したアドレスにだけつなぎ、内部のアドレスや自分自身にはつながず、転送はホップごとに確かめ直します。
+   https から http への転送の先は読みません。本文は `max-file-mb` (既定 32 MB) と `download-timeout-seconds` (既定 120 秒) で切ります。圧縮 (`Content-Encoding`) は展開しないので、圧縮された応答はホストしません。
+3. ホストしないもの:
+
+   | 種類 | 見分け方 |
+   | --- | --- |
+   | ライブ配信・分割配信 | 拡張子 `m3u8` `m3u` `mpd` `pls` `asx` `xspf` `ism` `f4m`、Content-Type の HLS / DASH の目録、Icecast の `icy-` ヘッダー、MJPEG などの `multipart/*`。長さの分からない配信は、本文の上限と期限でも止まります |
+   | 別のファイルを読む形式 | `.gltf` (`.bin` や画像を相対パスで読むので、1 つだけ写しても表示できない) |
+   | HTML (エラーページなど) | `text/html`、拡張子が画像などなのに `text/*` |
+   | 対応していない種類 | `allowed-extensions` にない拡張子。拡張子のない URL は Content-Type が画像・動画・音声・glb・PDF のときだけ (保存する拡張子は Content-Type から) |
+   | 管理者が取り下げた URL・`exclude-hosts` のホスト | |
+
+   ホストできなかった URL は、一時的な理由 (接続の失敗・期限切れ・正常でない応答) なら 1 日後、それ以外は 7 日後にもう一度だけ試します。
+4. ファイル名は内容の SHA-256 から作る 12 文字 (`<id>.<拡張子>`)。同じ内容は 1 つのファイルにまとめます。
+5. ホストしたら、その URL の看板の文字を `<public-base-url>/<id>.<拡張子>` に書き換えます。
+   - URL より後ろ (位置・大きさ・回転、余分な文字) はそのまま残します。MarumaSign 本体が書くときと同じく表の 4 行に均等に分け、裏は空にします (入りきらなければ裏も使う)。
+   - チャンクを読み込ませることはしません。読み込まれていない看板は、読み込まれたときに書き換えます。だれかが編集中の看板は、あとで。
+   - 看板がもう元の URL でなければ (書き直された・壊された) 書き換えません。
+   - 書き換える前の URL は `hosting.json` に看板ごとに残します。
+6. どの看板にも使われなくなってから `unhost-after-days` (既定 14 日) たったファイルは、ホストをやめて消します。
+7. `/marumasign hosting remove <id>` で取り下げると、ファイルを消し、元の URL はもうホストせず、書き換えた看板は元の URL に戻します (権利者からの申し立てなどのため)。
+
+配り方:
+
+- 内蔵の Web サーバー (`hosting.bind` `hosting.port`、既定 `0.0.0.0:8110`) が `/<id>.<拡張子>` だけを配ります (ファイル名の形を確かめ、ホストしているファイルだけ。`Range` に対応)。
+  公開するときは、前に HTTPS の逆プロキシ (Cloudflare Tunnel や nginx) を置いて、そのアドレスを `public-base-url` にします。
+  応答には `X-Content-Type-Options: nosniff`、`Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; sandbox` (SVG のスクリプトを動かさない)、
+  `Referrer-Policy: no-referrer`、`Access-Control-Allow-Origin: *` (BlueMap の 3D 表示が読めるように)、長いキャッシュを付けます。
+- 外の Web サーバーに配らせるときは `hosting.port: 0` にして、`hosting.directory` をその Web サーバーの公開フォルダにします (同じヘッダーを付けてください)。
+  Java の実行環境に `jdk.httpserver` がない場合も、こちらにします。
+- `public-base-url` は看板の文字数の都合で 100 文字までです。変えると、書き換え済みの看板は古いアドレスのままになるので、古いアドレスでも配れるようにしておいてください。
+- ホストしている URL は、このサーバー自身なので、リンクの検査には出しません。
+
+管理コマンド (権限 `marumasign.admin`):
+
+- `/marumasign hosting [status]` 件数・容量・候補・書き換え待ちの看板の数。
+- `/marumasign hosting list [ページ]` ホストしているファイルと元の URL。
+- `/marumasign hosting remove <id>` 取り下げ (上の 7)。
+
+注意:
+
+- ホストすると、看板に書かれた画像などを**サーバーが配る**ことになります。サーバーの規約・権利者からの申し立てへの対応 (`remove`) は、運営で決めてください。
+- 看板の文字が、書いた人の URL からホスト先の URL に変わります (書いた人がもう一度編集すると、ホスト先の URL が見えます)。
 ## 安全性
 
 公開サイトに出るので、看板の文字は信用しません。看板は誰でも書けて、地図を見る人のブラウザーが看板に書かれた URL を読みに行く、という前提で作っています。
@@ -133,7 +194,7 @@ URL ごとに 1 回 (同じ URL の看板が複数あっても 1 回)。状態�
 | 空を覆う巨大な画像・遠くへ飛ばす位置 (看板には ±1000 まで書ける) | 3D 表示で、画像の大きさと位置のずれに上限 (`web3d.max-size` `web3d.max-offset`、既定 64 ブロック) |
 | 数値の細工 (`NaN` `Infinity`) | 読み込み時に除く。キャッシュから読んだ値も、有限で ±1000 の範囲に収める |
 | 短縮 URL の解決を悪用した、サーバーからの内部へのアクセス (SSRF) | つなぐのは設定した短縮サービスのホスト (既定 `is.gd` `v.gd` `x.gd`) の `https` 443 番だけ。`HEAD` で `Location` を読むだけで、転送を自動で追わず、行き先にはつながない。行き先は URL の確認と DNS の確認を通ったものだけ使う。3 回まで・300 ms 間隔。保存したキャッシュも使う前にもう一度確認する |
-| 無関係なファイルへの書き込み | 書くのは `plugins/BlueMapMarumaSign/` の中と、BlueMap の `webroot` の `js/marumasign3d.js` と `marumasign/<地図の id>.json` だけ (id は英数字などに限る)。ワールドのデータは読み取り専用 |
+| 無関係なファイルへの書き込み | 書くのは `plugins/MarumaSignCompanion/` の中と、BlueMap の `webroot` の `js/marumasign3d.js` と `marumasign/<地図の id>.json` だけ (id は英数字などに限る)。ワールドのデータは読み取り専用 |
 | 1 つのブラウザーの負荷 | 距離 (既定 192 ブロック)・数 (既定 200)・テクスチャの量・同時に読む数に上限 |
 | 多すぎるマーカー | `max-markers` (Dynmap / markers モード)、`web3d.max-signs` |
 
@@ -147,36 +208,38 @@ CSP の `connect-src https:` は 3D 表示が画像を読むために、`'unsafe
 
 ## ビルドとテスト
 
-JDK 25 以上が必要です (Paper 26.3 の API が Java 25 以上のため)。Gradle の Java ツールチェーンで 25 を使います。
+Kotlin で書いています。JDK 25 以上が必要です (Paper 26.3 の API が Java 25 以上のため)。Gradle の Java ツールチェーンで 25 を使います。Kotlin の標準ライブラリは JAR に入れて、パッケージを移しています (ほかの Kotlin 製プラグインと衝突しない)。
 
 ```
-gradle test      # 単体テスト (Java)
-gradle jar       # build/libs/BlueMapMarumaSign-<版>.jar
+gradle test      # 単体テスト
+gradle shadowJar # build/libs/MarumaSignCompanion-<版>.jar (Kotlin の標準ライブラリ入り。-thin.jar は入っていないので使わない)
 node src/test/js/marumasign3d.test.js   # 3D 表示のスクリプトのテスト (Node 18 以上)
 ```
 
 - `OrientationTest`: 看板ブロックの向きの読み取り (1.18-1.21 の `Name`/`Properties` と、26.x の `id`/`properties`・初期値のブロックの書き方)。
 - `SecurityTest`: DNS で引いたアドレスの確認、短縮 URL の解決 (つなぐ先・転送・キャッシュ)、書き出すデータ、スクリプトに危険な記述がないこと。
 - `CoreTest`: 看板の判定、URL の確認、HTML のエスケープ、NBT の読み取り、キャッシュ。
+- `HostingTest` / `DownloadTest`: 看板の URL の差し替えと行の分け方、ホストしないものの判定、配るときの `Range`、`hosting.json` の検証、本文の書き出し (chunked・上限・途中で切れたもの・食い違う長さ)、転送と内容からの名前。
 - `marumasign3d.test.js`: URL・データの検証、大きさの上限、**MarumaSign 本体の `SignImage` が出した 300 通りの頂点 (`src/test/js/reference-mesh.json`) との一致 (差は 1e-6 以下)**。
 
 実際のワールドの region ファイルで試すには、いくつかの `.mca` をフォルダに入れて次のようにします (中身を出力します)。
 
 ```
-gradle test -Dsignmap.sampleRegions=<region ファイルのフォルダ>
+gradle test -Dmarumasign.sampleRegions=<region ファイルのフォルダ>
 ```
 
 ## デプロイ (Docker の Paper サーバー)
 
-1. `gradle jar` で JAR を作り、サーバーの `plugins/` に置きます (旧 JAR があれば `plugin_jars_old_*` に退避)。
-2. BlueMap 5.x (`bluemap-*-paper.jar`) か Dynmap (または両方) が `plugins/` に入っていて、地図が設定されていること。
-3. サーバーを再起動します (ログイン中のプレイヤーがいないことを確認してから)。
-4. ログに `[<ワールド名>] Scan finished: ...` と、`3D sign script installed in the BlueMap web root` が出ます。初回は全 region を読むので時間がかかります
-   (**キャッシュの形式が変わったので、更新後の最初の起動は全 region を読み直します**)。2 回目以降は更新された region だけです。
+1. `gradle shadowJar` で JAR を作り、サーバーの `plugins/` に置きます。旧名の `BlueMapMarumaSign-*.jar` があれば取り除きます (`plugin_jars_old_*` に退避。両方入れると二重に動きます)。
+2. 地図に出すなら、BlueMap 5.x (`bluemap-*-paper.jar`) か Dynmap (または両方) を `plugins/` に入れて、地図を設定します (なくても、ほかの機能は動きます)。
+3. ホストを使うなら、`config.yml` の `hosting` を設定し、`public-base-url` から内蔵の Web サーバー (既定 8110 番) に届くよう、逆プロキシを用意します。
+4. サーバーを再起動します (ログイン中のプレイヤーがいないことを確認してから)。
+5. ログに `[<ワールド名>] Scan finished: ...` (BlueMap があれば `3D sign script installed in the BlueMap web root`、ホストが有効なら `Hosting is on: ...`) が出ます。
+   初回は全 region を読むので時間がかかります。2 回目以降は更新された region だけです。
 
 ## 設定
 
-`plugins/BlueMapMarumaSign/config.yml` (初回起動時に作られます)。`/marumasignmap reload` で反映できます
+`plugins/MarumaSignCompanion/config.yml` (初回起動時に作られます)。`/marumasign reload` で反映できます
 (スレッド数・再走査の間隔・短縮 URL の解決の on/off・DNS の確認の on/off は再起動で反映)。
 
 ## 動作の前提と制限
@@ -193,6 +256,7 @@ gradle test -Dsignmap.sampleRegions=<region ファイルのフォルダ>
 - このプラグインのコードは私的な利用のためのもので、公開しません。
 - MarumaSign (MIT) の看板の形式と URL の確認規則、画像の位置・回転の計算を参考に、同じ判定・計算を自前で書いています (テスト用の頂点データは本体が出力したものです)。
 - `paper-api` と `bluemap-api` (MIT) と `gson` (Apache-2.0) はビルド時の参照だけで、JAR に含めません (サーバーが持っているものを使います)。
+- Kotlin の標準ライブラリ (Apache-2.0) は JAR に含めます (パッケージを移しています)。
   Web 側のスクリプトは、BlueMap が公開している three.js (`BlueMap.Three`) を使います。
 
 ## BlueMap の本番用設定

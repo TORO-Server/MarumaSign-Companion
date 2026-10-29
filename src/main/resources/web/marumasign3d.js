@@ -1,5 +1,5 @@
 /*
- * BlueMapMarumaSign: MarumaSign の看板の画像を、BlueMap の 3D の空間に置く。
+ * MarumaSignCompanion: MarumaSign の看板の画像を、BlueMap の 3D の空間に置く。
  *
  * 位置・大きさ・回転の計算は、MarumaSign 本体 (SignImage.java) と同じ。
  * 看板データは webroot/marumasign/<地図の id>.json (プラグインが書く)。

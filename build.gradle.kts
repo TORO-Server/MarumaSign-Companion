@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "net.torosaba"
-version = "1.0.0"
+version = "2.0.0"
 
 repositories {
     mavenCentral()
@@ -48,21 +48,21 @@ tasks.processResources {
 tasks.test {
     useJUnitPlatform()
     testLogging { showStandardStreams = true }
-    systemProperty("signmap.sampleRegions", System.getProperty("signmap.sampleRegions") ?: "")
+    systemProperty("marumasign.sampleRegions", System.getProperty("marumasign.sampleRegions") ?: "")
 }
 
 tasks.jar {
-    archiveBaseName.set("BlueMapMarumaSign")
+    archiveBaseName.set("MarumaSignCompanion")
     archiveClassifier.set("thin")
 }
 
 // Kotlin の標準ライブラリは JAR に入れる。ほかの Kotlin 製プラグインと衝突しないよう、パッケージを移す
 tasks.shadowJar {
-    archiveBaseName.set("BlueMapMarumaSign")
+    archiveBaseName.set("MarumaSignCompanion")
     archiveClassifier.set("")
-    relocate("kotlin", "net.torosaba.signmap.libs.kotlin")
-    relocate("org.jetbrains.annotations", "net.torosaba.signmap.libs.annotations")
-    relocate("org.intellij.lang.annotations", "net.torosaba.signmap.libs.intellij")
+    relocate("kotlin", "net.torosaba.marumasign.companion.libs.kotlin")
+    relocate("org.jetbrains.annotations", "net.torosaba.marumasign.companion.libs.annotations")
+    relocate("org.intellij.lang.annotations", "net.torosaba.marumasign.companion.libs.intellij")
     minimize()
 }
 
