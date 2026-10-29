@@ -130,7 +130,7 @@ internal class ReviewFixesTest {
         assertEquals(0, connects.get())
         assertEquals(SafeHttp.Kind.CONNECT_REFUSED, failureOf(http, "http://fine.example/"), "対照: 普通の公開アドレスにはつなごうとする")
         assertEquals(1, connects.get())
-        assertEquals(listOf("not an address", "1.2.3.4/99", "evil.example"), o.denyList.rejected())
+        assertEquals(listOf("not an address", "1.2.3.4/99", "evil.example"), o.denyList!!.rejected())
     }
 
     @Test
@@ -166,7 +166,7 @@ internal class ReviewFixesTest {
     fun unsafeRedirectsAreNotShownOnThePublicMap() {
         val cfg = LinkSettings()
         var s = LinkState.pending(1_000_000).apply(LinkProbe.Result.unknown(LinkReason.REDIRECT_UNSAFE, 302, false), 1_000_000, cfg, 0.0)
-        assertEquals(LinkStatus.UNKNOWN, s.status())
+        assertEquals(LinkStatus.UNKNOWN, s.status)
         assertFalse(s.needsAttention())
         assertNull(DynmapBackend.layerName(s, true))
         s = LinkState.pending(1_000_000).apply(LinkProbe.Result.unknown(LinkReason.UNSAFE_URL, 0, false), 1_000_000, cfg, 0.0)
@@ -214,10 +214,10 @@ internal class ReviewFixesTest {
         val probe = LinkProbe(SafeHttp(o2), UrlFilter(listOf()), cfg, HostThrottle(cfg), setOf(80), LongSupplier { System.currentTimeMillis() }, LinkProbe.Sleeper {
         })
         val r = probe.probe("http://legit.example/a.png")
-        assertEquals(LinkProbe.Verdict.DEFER, r.verdict())
+        assertEquals(LinkProbe.Verdict.DEFER, r.verdict)
         val after = LinkState.pending(1000).apply(r, 1000, cfg, 0.0)
-        assertEquals(LinkStatus.PENDING, after.status(), "状態は変わらず、あとでやり直す")
-        assertEquals(0, after.consecutiveFailures())
+        assertEquals(LinkStatus.PENDING, after.status, "状態は変わらず、あとでやり直す")
+        assertEquals(0, after.consecutiveFailures)
     }
 
     // ---- 5. 追跡の表を、看板にない URL で占められない ----
@@ -258,7 +258,7 @@ internal class ReviewFixesTest {
         for (i in 0 until 50) live.add(url("live", i))
         c.track(live)
         for (i in 0 until 40) c.step(clock.addAndGet(1000)) // 検査して、PENDING でなくする
-        assertEquals(50, c.counts().ok())
+        assertEquals(50, c.counts().ok)
         clock.addAndGet(10 * 60_000L)
         val both = ArrayList<String>(live)
         both.add(url("new", 1))

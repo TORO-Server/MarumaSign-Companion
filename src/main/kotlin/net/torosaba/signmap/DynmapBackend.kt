@@ -230,7 +230,7 @@ internal class DynmapBackend(private val plugin: SignMapPlugin) : MapBackend {
             // 公開の地図なので、DNS の確認 (HostGuard) は通さない: 名前が引けない URL こそ、リンク切れとして見つけたい。
             // 地図は URL の先へつながないので、安全に出せる (URL は文字だけで、リンクにしない)
             val view = plugin.markerHtml().classify(sign) ?: return null
-            val broken = st.status() == LinkStatus.BROKEN
+            val broken = st.status == LinkStatus.BROKEN
             val layer = if (broken) Layer.BROKEN else Layer.UNKNOWN
             return Desired(layer, world, x, y, z, problemLabel(st, view, broken), problemPopup(st, view, world, sign, byUrl[sign.url], broken, now))
         }
@@ -289,9 +289,9 @@ internal class DynmapBackend(private val plugin: SignMapPlugin) : MapBackend {
 
         /** 状態からレイヤーを決める。出さないものは null (未検査、一時的な 1 回の失敗、showOk でない正常) */
         private fun layerOf(st: LinkState, showOk: Boolean): Layer? {
-            if (st.status() == LinkStatus.BROKEN) return Layer.BROKEN
+            if (st.status == LinkStatus.BROKEN) return Layer.BROKEN
             if (st.needsAttention()) return Layer.UNKNOWN
-            if (st.status() == LinkStatus.OK && showOk) return Layer.OK
+            if (st.status == LinkStatus.OK && showOk) return Layer.OK
             return null
         }
 
@@ -300,7 +300,7 @@ internal class DynmapBackend(private val plugin: SignMapPlugin) : MapBackend {
 
         /** ホバーで出す短い文字 (HTML ではない)。例: リンク切れ(404 見つからない) 画像 i.imgur.com/xxxx… */
         fun problemLabel(st: LinkState, view: MarkerHtml.View, broken: Boolean): String =
-            (if (broken) "リンク切れ" else "要確認") + "(" + st.reason().publicLabel + ") " + view.kind.label + " " +
+            (if (broken) "リンク切れ" else "要確認") + "(" + st.reason.publicLabel + ") " + view.kind.label + " " +
                 SafeText.displayUrl(view.url, 40)
 
         /** クリックのポップアップ (HTML)。外から来た文字は、すべて無害にしてからエスケープする。URL はリンクにしない */
@@ -311,15 +311,15 @@ internal class DynmapBackend(private val plugin: SignMapPlugin) : MapBackend {
             h.append("<div><span style=\"background:").append(if (broken) "#c0392b" else "#b7950b")
                 .append(";color:#fff;border-radius:3px;padding:1px 6px;font-weight:bold\">")
                 .append(if (broken) "リンク切れ" else "要確認").append("</span> ")
-                .append(esc(st.reason().publicLabel)).append("</div>")
+                .append(esc(st.reason.publicLabel)).append("</div>")
             h.append("<div style=\"word-break:break-all;margin:6px 0\">").append(esc(view.kind.icon)).append(' ')
                 .append(esc(view.kind.label)).append(": <code>").append(esc(SafeText.displayUrl(view.url, 90))).append("</code></div>")
-            if (st.firstFailedAt() > 0) {
-                val days = Math.max(0L, (now - st.firstFailedAt()) / 86_400_000L)
+            if (st.firstFailedAt > 0) {
+                val days = Math.max(0L, (now - st.firstFailedAt) / 86_400_000L)
                 h.append("<div>").append(if (broken) "リンク切れになってから " else "失敗が始まってから ").append(days).append(" 日</div>")
             }
-            h.append("<div style=\"opacity:.8\">最終確認: ").append(time(st.lastCheckedAt())).append(" / 最後に正常: ")
-                .append(if (st.lastOkAt() > 0) time(st.lastOkAt()) else "なし").append("</div>")
+            h.append("<div style=\"opacity:.8\">最終確認: ").append(time(st.lastCheckedAt)).append(" / 最後に正常: ")
+                .append(if (st.lastOkAt > 0) time(st.lastOkAt) else "なし").append("</div>")
             h.append("<div style=\"margin-top:6px\">看板: ").append(esc(coords(world, sign.x, sign.y, sign.z)))
                 .append("<br><code>").append(esc(tpCommand(sign.x, sign.y, sign.z))).append("</code></div>")
             if (same != null && same.size > 1) {

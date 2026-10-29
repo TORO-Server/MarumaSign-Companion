@@ -151,7 +151,7 @@ class SecurityTest {
     private val html = MarkerHtml(UrlFilter(listOf()), settings)
 
     private fun view(url: String, orient: Int): MarkerHtml.View {
-        return html.classify(SignRecord(10, 64, -20, url, floatArrayOf(0f, 1f, 0f, 2f, 3f, 0f, 90f, 0f), orient))
+        return html.classify(SignRecord(10, 64, -20, url, floatArrayOf(0f, 1f, 0f, 2f, 3f, 0f, 90f, 0f), orient))!!
     }
 
     @Test

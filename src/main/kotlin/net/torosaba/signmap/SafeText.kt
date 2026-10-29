@@ -27,7 +27,6 @@ object SafeText {
     }
 
     /** 危険な文字を取り除き、max 文字までにする */
-    @JvmStatic
     fun clean(s: String?, max: Int): String {
         if (s == null) return ""
         val sb = StringBuilder(Math.min(s.length, max))
@@ -47,7 +46,6 @@ object SafeText {
      * 画面 (地図・チャット) に出す URL。ホスト (国際化ドメインは punycode も併記) とパスだけ。長ければ真ん中を省く。
      * URL として読めなければ、危険な文字を除いた文字を短くしたもの。
      */
-    @JvmStatic
     fun displayUrl(url: String?, max: Int): String {
         if (url == null) return ""
         val m = URL_PARTS.matcher(url)
@@ -69,7 +67,6 @@ object SafeText {
     private val URL_PARTS: Pattern = Pattern.compile("^[A-Za-z][A-Za-z0-9+.-]*://([^/?#]*)([^?#]*)")
 
     /** ログに出す URL。クエリ・フラグメント・ユーザー情報を除き、制御文字は見える形 (\\uXXXX) にする */
-    @JvmStatic
     fun logUrl(url: String?): String {
         if (url == null) return ""
         var s = stripQuery(url)

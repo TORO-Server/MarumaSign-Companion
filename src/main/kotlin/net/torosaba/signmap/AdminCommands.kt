@@ -42,11 +42,11 @@ internal class AdminCommands(private val plugin: SignMapPlugin?) {
         for ((name, w) in plugin!!.worldStates()) {
             for (s in w.store.all()) {
                 val st = states[s.url]
-                if (st != null && st.status() == LinkStatus.BROKEN) rows.add(Row(name, s, st))
+                if (st != null && st.status == LinkStatus.BROKEN) rows.add(Row(name, s, st))
             }
         }
         // リンク切れの期間が長い順 (最初に失敗した時刻が早い順)
-        rows.sortWith(Comparator.comparingLong<Row> { r -> if (r.state.firstFailedAt() > 0) r.state.firstFailedAt() else Long.MAX_VALUE }
+        rows.sortWith(Comparator.comparingLong<Row> { r -> if (r.state.firstFailedAt > 0) r.state.firstFailedAt else Long.MAX_VALUE }
             .thenComparing(Comparator.comparing<Row, String> { it.world })
             .thenComparingInt { it.sign.x }.thenComparingInt { it.sign.z })
         return rows
@@ -78,10 +78,10 @@ internal class AdminCommands(private val plugin: SignMapPlugin?) {
     private fun linkStatus(sender: CommandSender, checker: LinkChecker) {
         val c = checker.counts()
         val total = checker.tracked()
-        val done = total - c.pending()
+        val done = total - c.pending
         sender.sendMessage(Component.text("リンク検査: 追跡 " + total + " 件 / 検査済み " + done + " (" + (if (total == 0) 100 else done * 100 / total) + "%)", NamedTextColor.GOLD))
-        sender.sendMessage(Component.text("OK " + c.ok() + " / BROKEN " + c.broken() + " / UNKNOWN " + c.unknown() + " / PENDING " + c.pending(), NamedTextColor.WHITE))
-        sender.sendMessage(Component.text("検査中 " + c.inFlight() + " / 直近 1 時間の検査 " + c.hourUsed() + " (上限 " + plugin!!.settings().link.perHourLimit + ")", NamedTextColor.GRAY))
+        sender.sendMessage(Component.text("OK " + c.ok + " / BROKEN " + c.broken + " / UNKNOWN " + c.unknown + " / PENDING " + c.pending, NamedTextColor.WHITE))
+        sender.sendMessage(Component.text("検査中 " + c.inFlight + " / 直近 1 時間の検査 " + c.hourUsed + " (上限 " + plugin!!.settings().link.perHourLimit + ")", NamedTextColor.GRAY))
     }
 
     // ---- recheck <URL|all-broken> ----
@@ -122,11 +122,11 @@ internal class AdminCommands(private val plugin: SignMapPlugin?) {
         fun line(r: Row, now: Long): Component {
             val s = r.sign
             val cmd = DynmapBackend.tpCommand(s.x, s.y, s.z)
-            val days = if (r.state.firstFailedAt() > 0) Math.max(0L, (now - r.state.firstFailedAt()) / 86_400_000L) else 0L
+            val days = if (r.state.firstFailedAt > 0) Math.max(0L, (now - r.state.firstFailedAt) / 86_400_000L) else 0L
             return Component.text("[" + DynmapBackend.coords(r.world, s.x, s.y, s.z) + "]", NamedTextColor.AQUA)
                 .clickEvent(ClickEvent.suggestCommand(cmd))
                 .hoverEvent(HoverEvent.showText(Component.text("クリックで入力欄に $cmd を入れる")))
-                .append(Component.text(" " + days + "日 " + r.state.reason().name + " " + SafeText.displayUrl(s.url, 50), NamedTextColor.GRAY))
+                .append(Component.text(" " + days + "日 " + r.state.reason.name + " " + SafeText.displayUrl(s.url, 50), NamedTextColor.GRAY))
         }
 
         fun parsePage(s: String?): Int? {

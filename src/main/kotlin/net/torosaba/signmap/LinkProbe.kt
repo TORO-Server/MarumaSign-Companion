@@ -24,27 +24,21 @@ class LinkProbe internal constructor(
 
     /** 検査の結果。countsAsFailure は、UNKNOWN のとき連続した失敗の数に入れるか */
     data class Result(
-        @get:JvmName("verdict") val verdict: Verdict,
+        val verdict: Verdict,
         val reason: LinkReason,
         val httpCode: Int,
         val countsAsFailure: Boolean,
         val retryAfterMillis: Long,
     ) {
         companion object {
-            @JvmStatic
-            @JvmName("ok")
             internal fun ok(code: Int): Result {
                 return Result(Verdict.OK, LinkReason.OK, code, false, 0)
             }
 
-            @JvmStatic
-            @JvmName("broken")
             internal fun broken(reason: LinkReason, code: Int): Result {
                 return Result(Verdict.BROKEN, reason, code, true, 0)
             }
 
-            @JvmStatic
-            @JvmName("unknown")
             internal fun unknown(reason: LinkReason, code: Int, counts: Boolean): Result {
                 return Result(Verdict.UNKNOWN, reason, code, counts, 0)
             }
@@ -78,7 +72,6 @@ class LinkProbe internal constructor(
      * 検査してよい URL なら URI、だめなら null。看板の URL の確認 ([UrlFilter]: http/https、ユーザー情報なし、
      * 空白・制御文字・バックスラッシュなし、2000 文字まで、変則の IP の書き方や内部の名前は拒否) に加えて、ポートは 80/443/8080/8443 だけ。
      */
-    @JvmName("strictParse")
     internal fun strictParse(url: String?): URI? {
         val uri = filter.parse(url) ?: return null
         if (uri.port != -1 && !ports.contains(uri.port)) return null
@@ -197,8 +190,6 @@ class LinkProbe internal constructor(
         private val DEFAULT_PORTS: Set<Int> = setOf(80, 443, 8080, 8443)
         private const val MAX_THROTTLE_WAIT_MILLIS = 15_000L
 
-        @JvmStatic
-        @JvmName("create")
         internal fun create(cfg: LinkSettings, filter: UrlFilter, throttle: HostThrottle): LinkProbe {
             val o = SafeHttp.Options()
             o.connectTimeoutMillis = LinkSettings.clamp(cfg.connectTimeoutSeconds, 1, 30) * 1000

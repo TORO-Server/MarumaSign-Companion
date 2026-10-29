@@ -12,14 +12,14 @@ package net.torosaba.signmap
  * - 前に BROKEN で、今回が UNKNOWN: BROKEN のまま (確かめられなかっただけで、復活とは言えない)。
  */
 data class LinkState(
-    @get:JvmName("status") val status: LinkStatus,
-    @get:JvmName("reason") val reason: LinkReason,
+    val status: LinkStatus,
+    val reason: LinkReason,
     val httpCode: Int,
-    @get:JvmName("firstFailedAt") val firstFailedAt: Long,
+    val firstFailedAt: Long,
     val lastFailedAt: Long,
-    @get:JvmName("lastOkAt") val lastOkAt: Long,
-    @get:JvmName("lastCheckedAt") val lastCheckedAt: Long,
-    @get:JvmName("consecutiveFailures") val consecutiveFailures: Int,
+    val lastOkAt: Long,
+    val lastCheckedAt: Long,
+    val consecutiveFailures: Int,
     val nextCheckAt: Long,
     val lastSeenAt: Long,
 ) {
@@ -88,7 +88,6 @@ data class LinkState(
         private const val HOUR = 3_600_000L
         private const val DAY = 24 * HOUR
 
-        @JvmStatic
         fun pending(now: Long): LinkState {
             return LinkState(LinkStatus.PENDING, LinkReason.OK, 0, 0, 0, 0, 0, 0, 0, now)
         }

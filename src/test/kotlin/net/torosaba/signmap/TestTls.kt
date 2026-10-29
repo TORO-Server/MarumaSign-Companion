@@ -17,9 +17,9 @@ import javax.net.ssl.TrustManagerFactory
 
 /** テスト用の証明書 (JDK の keytool で作る) と、それを使う HTTPS サーバー */
 internal class TestTls private constructor(
-    @JvmField val serverContext: SSLContext,
+    val serverContext: SSLContext,
     /** この証明書 (の発行元) を信用するクライアント側。ホスト名の検証は、SafeHttp が endpoint identification で行う */
-    @JvmField val trustingClientContext: SSLContext,
+    val trustingClientContext: SSLContext,
 ) {
 
     @Throws(IOException::class)
@@ -50,7 +50,6 @@ internal class TestTls private constructor(
          * 自己署名の証明書 (SAN は localhost と site.example)。
          * expired が true なら、テスト用の CA が発行した、すでに期限が切れた証明書 (自己署名は、信頼の起点なので期限が見られない)。
          */
-        @JvmStatic
         fun create(dir: Path, expired: Boolean): TestTls {
             val leaf = dir.resolve(if (expired) "expired-leaf.p12" else "self.p12")
             val trust = KeyStore.getInstance("PKCS12")

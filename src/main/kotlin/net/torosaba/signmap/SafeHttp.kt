@@ -70,7 +70,7 @@ internal class SafeHttp(private val o: Options) {
     }
 
     /** 失敗。メッセージは固定の分類名だけ (詳細は持たない) */
-    class HttpFailure(@JvmField val kind: Kind) : IOException(kind.name)
+    class HttpFailure(val kind: Kind) : IOException(kind.name)
 
     fun interface Resolver {
         @Throws(UnknownHostException::class)
@@ -86,23 +86,23 @@ internal class SafeHttp(private val o: Options) {
     data class Response(val status: Int, val location: String?, val contentType: String, val retryAfter: String?, val bodyBytes: Long)
 
     class Options {
-        @JvmField var connectTimeoutMillis = 5_000
-        @JvmField var totalTimeoutMillis = 20_000
-        @JvmField var maxHeaderBytes = 32 * 1024
-        @JvmField var maxHeaderLines = 100
-        @JvmField var maxLineBytes = 8 * 1024
-        @JvmField var maxBodyBytes = 64 * 1024
-        @JvmField var userAgent = "BlueMapMarumaSign-LinkCheck/1.0"
+        var connectTimeoutMillis = 5_000
+        var totalTimeoutMillis = 20_000
+        var maxHeaderBytes = 32 * 1024
+        var maxHeaderLines = 100
+        var maxLineBytes = 8 * 1024
+        var maxBodyBytes = 64 * 1024
+        var userAgent = "BlueMapMarumaSign-LinkCheck/1.0"
         // ---- 次の 4 つはテスト用 (設定ファイルからは変えられない) ----
-        @JvmField var allowNonPublicForTests = false
+        var allowNonPublicForTests = false
         /** 接続先が自分自身のアドレスでも閉じない (ループバックのサーバーへ向け直すテスト用) */
-        @JvmField var allowSelfConnectForTests = false
-        @JvmField var sslContext: SSLContext? = null
-        @JvmField var resolver: Resolver? = null
-        @JvmField var connector: Connector? = null
-        @JvmField var localAddresses: Supplier<Collection<InetAddress>>? = null
+        var allowSelfConnectForTests = false
+        var sslContext: SSLContext? = null
+        var resolver: Resolver? = null
+        var connector: Connector? = null
+        var localAddresses: Supplier<Collection<InetAddress>>? = null
         /** 設定の「接続しないアドレス」(サーバー自身の公開アドレスなど)。null なら何もしない */
-        @JvmField var denyList: AddressDenyList? = null
+        var denyList: AddressDenyList? = null
     }
 
     private val resolver: Resolver = o.resolver ?: systemResolver(5_000)
@@ -498,7 +498,6 @@ internal class SafeHttp(private val o: Options) {
             return SystemResolver(timeoutMillis, Lookup(InetAddress::getAllByName), 4)
         }
 
-        @JvmStatic
         fun systemResolver(timeoutMillis: Int, lookup: Lookup, slots: Int): Resolver {
             return SystemResolver(timeoutMillis, lookup, slots)
         }
@@ -574,7 +573,6 @@ internal class SafeHttp(private val o: Options) {
         }
 
         /** テスト用: 複数のアドレスを返す名前の引き方を作る */
-        @JvmStatic
         fun fixedResolver(table: Map<String, Array<InetAddress>>): Resolver {
             return Resolver { host ->
                 val a = table[host] ?: throw UnknownHostException(host)

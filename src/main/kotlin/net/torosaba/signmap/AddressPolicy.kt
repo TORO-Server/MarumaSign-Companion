@@ -11,7 +11,6 @@ import java.net.InetAddress
  */
 object AddressPolicy {
 
-    @JvmStatic
     fun isPublic(a: InetAddress?): Boolean {
         if (a == null) return false
         if (a.isAnyLocalAddress || a.isLoopbackAddress || a.isLinkLocalAddress || a.isSiteLocalAddress || a.isMulticastAddress) {

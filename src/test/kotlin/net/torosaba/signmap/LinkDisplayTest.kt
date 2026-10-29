@@ -279,8 +279,8 @@ internal class LinkDisplayTest {
         assertEquals("EvilX-Injected: yes", l.userAgent)
         assertFalse(l.userAgent.contains("\r") || l.userAgent.contains("\n"))
         assertEquals(1, l.hostRules.size)
-        assertEquals(3600, l.hostRules[0].minIntervalSeconds())
-        assertEquals(listOf("/removed.png"), l.hostRules[0].removedPaths())
+        assertEquals(3600, l.hostRules[0].minIntervalSeconds)
+        assertEquals(listOf("/removed.png"), l.hostRules[0].removedPaths)
     }
 
     @Test
@@ -299,7 +299,7 @@ internal class LinkDisplayTest {
         assertEquals(5, l.connectTimeoutSeconds)
         assertEquals(20, l.totalTimeoutSeconds)
         assertEquals(64, l.maxBodyKb)
-        assertEquals("/removed.png", l.ruleFor("i.imgur.com").removedPaths()[0])
+        assertEquals("/removed.png", l.ruleFor("i.imgur.com")!!.removedPaths[0])
         val s = Settings()
         assertTrue(s.dynmapDefaultHidden)
         assertFalse(s.dynmapShowOk)

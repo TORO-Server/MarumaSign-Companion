@@ -44,12 +44,12 @@ class LinkChecker internal constructor(
     }
 
     data class Counts(
-        @get:JvmName("ok") val ok: Int,
-        @get:JvmName("broken") val broken: Int,
-        @get:JvmName("unknown") val unknown: Int,
-        @get:JvmName("pending") val pending: Int,
-        @get:JvmName("inFlight") val inFlight: Int,
-        @get:JvmName("hourUsed") val hourUsed: Int,
+        val ok: Int,
+        val broken: Int,
+        val unknown: Int,
+        val pending: Int,
+        val inFlight: Int,
+        val hourUsed: Int,
     )
 
     private val entries = ConcurrentHashMap<String, Entry>()
@@ -229,7 +229,6 @@ class LinkChecker internal constructor(
     // ---- 検査の割り当て ----
 
     /** 検査してよいものがあれば、空きの分だけ始める。始めた数 (テストからも呼ぶ) */
-    @JvmName("step")
     internal fun step(now: Long): Int {
         if (now < startAfter || stopped) return 0
         var slots = LinkSettings.clamp(cfg.concurrency, 1, 4) - inFlight.size

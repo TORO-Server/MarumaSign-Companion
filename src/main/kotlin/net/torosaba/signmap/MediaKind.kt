@@ -4,7 +4,7 @@ import java.net.URI
 import java.util.TreeSet
 
 /** 看板の URL が表すものの種類 (拡張子で判別) */
-enum class MediaKind(@JvmField val id: String, @JvmField val label: String, @JvmField val icon: String) {
+enum class MediaKind(val id: String, val label: String, val icon: String) {
     IMAGE("image", "画像", "🖼"),
     VIDEO("video", "動画", "🎬"),
     AUDIO("audio", "音声", "🎵"),
@@ -30,7 +30,6 @@ enum class MediaKind(@JvmField val id: String, @JvmField val label: String, @Jvm
         )
 
         /** 許可する拡張子の初期値 (MarumaSign が対応している形式) */
-        @JvmStatic
         fun defaultExtensions(): Set<String> {
             val all = TreeSet<String>()
             all.addAll(IMAGE_EXT)
@@ -44,7 +43,6 @@ enum class MediaKind(@JvmField val id: String, @JvmField val label: String, @Jvm
         }
 
         /** URL のパスの拡張子 (小文字。なければ空文字) */
-        @JvmStatic
         fun extension(uri: URI): String {
             val path = uri.path ?: return ""
             val slash = path.lastIndexOf('/')
@@ -54,7 +52,6 @@ enum class MediaKind(@JvmField val id: String, @JvmField val label: String, @Jvm
             return name.substring(dot + 1).lowercase()
         }
 
-        @JvmStatic
         fun of(extension: String): MediaKind {
             if (VIDEO_EXT.contains(extension)) return VIDEO
             if (AUDIO_EXT.contains(extension)) return AUDIO
@@ -66,7 +63,6 @@ enum class MediaKind(@JvmField val id: String, @JvmField val label: String, @Jvm
             return OTHER
         }
 
-        @JvmStatic
         fun isBrowserImage(extension: String): Boolean {
             return BROWSER_IMAGES.contains(extension)
         }

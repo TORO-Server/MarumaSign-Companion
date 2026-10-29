@@ -20,7 +20,6 @@ internal object WebExporter {
     private val TEXTURE_EXTENSIONS = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "avif")
 
     /** 画像として読み込む URL。読めない・描けない種類は null */
-    @JvmStatic
     fun imageUrl(view: MarkerHtml.View): String? {
         if (!Orient.valid(view.sign.orient)) return null
         // テクスチャにするのは、ラスター画像だけ (svg はスクリプトを含みうるので使わない)
@@ -33,7 +32,6 @@ internal object WebExporter {
     }
 
     // imgur のページの URL (imgur.com/xxxx.png) は画像のサーバーへ転送され、CORS が通らないので、画像のホストにする
-    @JvmStatic
     fun rewriteImageHost(url: String): String {
         val uri: URI
         try {
@@ -51,7 +49,6 @@ internal object WebExporter {
 
     private val IMGUR_PATH = Regex("/[A-Za-z0-9]{5,10}\\.(png|jpe?g|gif|webp)")
 
-    @JvmStatic
     fun write(file: Path, views: List<MarkerHtml.View>, settings: Settings) {
         Files.createDirectories(file.parent)
         val tmp = file.resolveSibling(file.fileName.toString() + ".tmp")
