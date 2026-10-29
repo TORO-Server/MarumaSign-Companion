@@ -87,8 +87,9 @@ final class DynmapBackend implements MapBackend {
                 plugin.getLogger().warning("Could not create the Dynmap marker set");
                 return;
             }
-            s.setHideByDefault(plugin.settings().defaultHidden);
-            s.setLabelShow(true);
+            s.setHideByDefault(plugin.settings().dynmapDefaultHidden);
+            // ラベルは常時表示せず (数千件の枠で地図が埋まる)、アイコンにマウスを乗せたときだけ出す。中身はクリックのポップアップ
+            s.setLabelShow(false);
             s.setLayerPriority(10);
             icon = markers.getMarkerIcon(MarkerIcon.SIGN);
             if (icon == null) icon = markers.getMarkerIcon(MarkerIcon.DEFAULT);
@@ -168,16 +169,16 @@ final class DynmapBackend implements MapBackend {
 
     private void put(MarkerSet s, String worldName, String id, MarkerHtml.View view) {
         final SignRecord sign = view.sign();
-        final String label = plugin.markerHtml().html(view, plugin.settings().thumbnailSize);
+        final String label = plugin.markerHtml().label(view);
         final String popup = plugin.markerHtml().html(view, POPUP_SIZE);
         final double x = sign.x() + 0.5, y = sign.y() + 0.5, z = sign.z() + 0.5;
         Marker m = s.findMarker(id);
         if (m == null) {
-            m = s.createMarker(id, label, true, worldName, x, y, z, icon, false);
+            m = s.createMarker(id, label, false, worldName, x, y, z, icon, false);
             if (m == null) return;
         } else {
             m.setLocation(worldName, x, y, z);
-            m.setLabel(label, true);
+            m.setLabel(label, false);
         }
         m.setDescription(popup);
     }
