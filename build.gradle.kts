@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "net.torosaba"
-version = "2.1.0"
+version = "2.2.0"
 
 repositories {
     mavenCentral()
@@ -29,6 +29,8 @@ dependencies {
     testImplementation("io.papermc.paper:paper-api:26.3.build.227-stable")
     testImplementation("us.dynmap:DynmapCoreAPI:3.8") { isTransitive = false }
     testImplementation("com.google.code.gson:gson:2.11.0")
+    // データベースのテストだけ (MySQL 互換のモード)。本番のドライバー (MySQL Connector/J) は plugin.yml の libraries
+    testImplementation("com.h2database:h2:2.5.252")
     testImplementation(kotlin("test-junit5"))
     testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.11.4")

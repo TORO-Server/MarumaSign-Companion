@@ -158,11 +158,58 @@ URL ごとに 1 回 (同じ URL の看板が複数あっても 1 回)。状態�
    - URL より後ろ (位置・大きさ・回転、余分な文字) はそのまま残します。MarumaSign 本体が書くときと同じく表の 4 行に均等に分け、裏は空にします (入りきらなければ裏も使う)。
    - チャンクを読み込ませることはしません。読み込まれていない看板は、読み込まれたときに書き換えます。だれかが編集中の看板は、あとで。
    - 看板がもう元の URL でなければ (書き直された・壊された) 書き換えません。
-   - 書き換える前の URL は `hosting.json` に看板ごとに残します。
+   - 書き換える前の URL は `hosting.json` (`storage: database` ではデータベース) に看板ごとに残します。
 6. どの看板にも使われなくなってから `unhost-after-days` (既定 14 日) たったファイルは、ホストをやめて消します。
 7. `/marumasign hosting remove <id>` で取り下げると、ファイルを消し、元の URL はもうホストせず、書き換えた看板は元の URL に戻します (権利者からの申し立てなどのため)。
 
-配り方:
+### 保存先 (`hosting.storage`)
+
+| 値 | ファイルの中身 | 状態 (候補・失敗・書き換え待ち・取り下げ・元の URL) | 配るもの |
+| --- | --- | --- | --- |
+| `files` (既定) | `hosting.directory` (空ならプラグインのフォルダの `hosted`) に `<id>.<拡張子>` | `hosting.json` | 内蔵の Web サーバーか、外の Web サーバー (下の「配り方」) |
+| `database` | データベース (TiDB / MySQL) の行に 1 MiB ずつ | データベースの行 | データベースを直接読む別の assets サーバー (このプラグインの内蔵の Web サーバーは使わない) |
+
+`database` の設定は `hosting.database` (`url` `user` `password` `table-prefix`。既定は `jdbc:mysql://tidb:4000/marumasign`、`root`、空のパスワード、`msc_`)。
+
+- URL のデータベースがなければ、データベースを付けずにつないで `CREATE DATABASE IF NOT EXISTS` で作り、表がなければ作ります。
+- JDBC のドライバー (MySQL Connector/J) は JAR に入れず、`plugin.yml` の `libraries` で Paper に読み込ませます (初回の起動で Maven Central から取ってきます)。ORM は使わず、JDBC だけです。
+- データベースの読み書きは、メインスレッドでは行いません (ホストのスレッドと、クライアントの記録のスレッド。接続はそれぞれ 1 本で、切れたらつなぎ直します)。
+  データベースにつながらないあいだは、ホストの処理を止めて、1 分ごとに読み込みをやり直します (空の状態で上書きしないため)。
+- `files` から `database` に変えると、最初の起動で、`hosting.json` とフォルダのファイルをデータベースに取り込み (中身が名前の id と合うものだけ。何度やっても同じ結果)、
+  `hosting.json` を `hosting.json.migrated` に名前を変えます。フォルダは消さないので、確かめてから消してください。
+
+表 (`table-prefix` が `msc_` のとき。assets サーバーが読むので、形は変えません。時刻はすべて epoch ミリ秒):
+
+| 表 | 列 | 中身 |
+| --- | --- | --- |
+| `msc_hosted_file` | `id` CHAR(12) 主キー、`ext`、`content_type`、`size`、`chunk_size`、`chunks`、`sha256`、`hosted_at`、`last_used_at` | ホストしているファイル。`content_type` は配るときの Content-Type、`sha256` は中身の SHA-256 (16 進) |
+| `msc_hosted_chunk` | `id`、`seq`、`data` MEDIUMBLOB (主キー `id, seq`) | 中身。1 行 1 MiB (1048576 バイト) で、最後の行だけ短い |
+| `msc_hosted_source` | `url_hash` BINARY(32) 主キー、`url`、`file_id` | 元の URL (`url_hash` は URL の UTF-8 の SHA-256) |
+| `msc_sign_origin` | `sign_key` 主キー (`world:x:y:z`)、`file_id`、`original_url` | 書き換えた看板と、書き換える前の URL |
+| `msc_state` | `name` 主キー、`json` | `candidates` `failures` `rewrites` `denied` の 4 行 (`hosting.json` と同じ形。読むときも同じ確認) |
+| `msc_client` | `ip_hash` BINARY(32) 主キー、`last_seen`、`online` | いま遊んでいる (か、さっきまで遊んでいた) プレイヤーの IP の HMAC (下) |
+
+- 新しいファイルは、中身の行をすべて書いてから `msc_hosted_file` の行を書きます。assets サーバーは `msc_hosted_file` の行があるファイルだけを配り、`chunks` と `size` を信じてよい
+  (中身がそろっていない `msc_hosted_file` の行は作りません)。TiDB は 1 つの書き込みが 6 MB を超えると断るので、中身は 1 行ずつ別の文で書きます。
+- 消すときは、`msc_hosted_file` の行を先に消してから、中身・元の URL・看板の行を消します。途中で止まった残りは、次の起動で片づけます。
+- 使った時刻 (`last_used_at`) と状態は、いつもの間隔 (5 分ごと・処理のあと) で、変わったところだけまとめて書きます。
+
+### 接続しているクライアントの記録 (`hosting.client-check`)
+
+assets サーバー (`https://assets.torosaba.net/<id>.<拡張子>`) は、MarumaSign の Mod がプレイヤーの PC から看板の画像を読むので、
+**いま遊んでいるプレイヤーの IP** (か、ログアウトしてから `grace-minutes` 以内) と、TORO の地図のページ (Origin) からの読み込みだけを許します。
+そのための IP の一覧を、このプラグインが `msc_client` に書きます (`storage: database`、`client-check.enabled: true`、`secret` が空でないときだけ)。
+
+- `ip_hash` = HMAC-SHA256 (鍵は `secret` の UTF-8、メッセージはアドレスのバイト列。IPv4 は 4 バイト、IPv6 は 16 バイト。IPv4 射影の IPv6 `::ffff:a.b.c.d` は IPv4 の 4 バイトにしてから)。
+  **IP はそのまま保存せず、ログにも出しません。** `secret` は assets サーバーと同じ文字列にします。
+- ログインで `online=1`、ログアウトで `online=0` (同じ IP のプレイヤーがまだいれば `online=1` のまま)。どちらも `last_seen` はその時刻。
+- 1 分ごとに、オンラインのプレイヤー全員の `last_seen` を更新します。3 分以上更新されていないオンラインの行 (ログアウトを取りこぼしたもの) はオフラインにします。
+- 起動したとき (`/reload` を含む) は、すべての行をオフラインにしてから、いまのプレイヤーを入れます。止めるときは、すべてオフラインにします (`last_seen` は止めた時刻)。
+- `last_seen` が 1 日より前の行は消します。
+- IP は `player.address` です。BungeeGuard などで転送しているときは、プレイヤーの本当の IP になります。
+- `grace-minutes` (既定 10 分) は assets サーバーが使う値です (このプラグインは、行を 1 日残すだけです)。
+
+配り方 (`storage: files`):
 
 - 内蔵の Web サーバー (`hosting.bind` `hosting.port`、既定 `0.0.0.0:8110`) が `/<id>.<拡張子>` だけを配ります (ファイル名の形を確かめ、ホストしているファイルだけ。`Range` に対応)。
   公開するときは、前に HTTPS の逆プロキシ (Cloudflare Tunnel や nginx) を置いて、そのアドレスを `public-base-url` にします。
@@ -175,7 +222,7 @@ URL ごとに 1 回 (同じ URL の看板が複数あっても 1 回)。状態�
 
 管理コマンド (権限 `marumasign.admin`):
 
-- `/marumasign hosting [status]` 件数・容量・候補・書き換え待ちの看板の数。
+- `/marumasign hosting [status]` 件数・容量・候補・書き換え待ちの看板の数、保存先 (`files` / `database`) とデータベースの接続の状態、クライアントの記録の状態。
 - `/marumasign hosting list [ページ]` ホストしているファイルと元の URL。
 - `/marumasign hosting remove <id>` 取り下げ (上の 7)。
 
@@ -183,6 +230,8 @@ URL ごとに 1 回 (同じ URL の看板が複数あっても 1 回)。状態�
 
 - ホストすると、看板に書かれた画像などを**サーバーが配る**ことになります。サーバーの規約・権利者からの申し立てへの対応 (`remove`) は、運営で決めてください。
 - 看板の文字が、書いた人の URL からホスト先の URL に変わります (書いた人がもう一度編集すると、ホスト先の URL が見えます)。
+- `storage: database` の `password` と `client-check.secret` は `config.yml` に平文で書きます。ログ・コマンドには出しません (接続先の URL も、`?` より後ろとユーザー情報を除いて出します)。
+
 ## 安全性
 
 公開サイトに出るので、看板の文字は信用しません。看板は誰でも書けて、地図を見る人のブラウザーが看板に書かれた URL を読みに行く、という前提で作っています。
@@ -199,6 +248,7 @@ URL ごとに 1 回 (同じ URL の看板が複数あっても 1 回)。状態�
 | 数値の細工 (`NaN` `Infinity`) | 読み込み時に除く。キャッシュから読んだ値も、有限で ±1000 の範囲に収める |
 | 短縮 URL の解決を悪用した、サーバーからの内部へのアクセス (SSRF) | つなぐのは設定した短縮サービスのホスト (既定 `is.gd` `v.gd` `x.gd`) の `https` 443 番だけ。`HEAD` で `Location` を読むだけで、転送を自動で追わず、行き先にはつながない。行き先は URL の確認と DNS の確認を通ったものだけ使う。3 回まで・300 ms 間隔。保存したキャッシュも使う前にもう一度確認する |
 | 無関係なファイルへの書き込み | 書くのは `plugins/MarumaSignCompanion/` の中と、BlueMap の `webroot` の `js/marumasign3d.js` と `marumasign/<地図の id>.json` だけ (id は英数字などに限る)。ワールドのデータは読み取り専用 |
+| プレイヤーの IP の保存 (`hosting.client-check`) | IP はそのまま保存せず、assets サーバーと共有する秘密の文字列での HMAC-SHA256 だけを `msc_client` に書く。1 日で消す。IP はログ・コマンドに出さない。`secret` が空なら何も書かない |
 | 1 つのブラウザーの負荷 | 距離 (既定 192 ブロック)・数 (既定 200)・テクスチャの量・同時に読む数に上限 |
 | 多すぎるマーカー | `max-markers` (Dynmap / markers モード)、`web3d.max-signs` |
 
@@ -224,6 +274,8 @@ node src/test/js/marumasign3d.test.js   # 3D 表示のスクリプトのテス�
 - `SecurityTest`: DNS で引いたアドレスの確認、短縮 URL の解決 (つなぐ先・転送・キャッシュ)、書き出すデータ、スクリプトに危険な記述がないこと。
 - `CoreTest`: 看板の判定、URL の確認、HTML のエスケープ、NBT の読み取り、キャッシュ。
 - `HostingTest` / `DownloadTest`: 看板の URL の差し替えと行の分け方、ホストしないものの判定、配るときの `Range`、`hosting.json` の検証、本文の書き出し (chunked・上限・途中で切れたもの・食い違う長さ)、転送と内容からの名前。
+- `HostingDbTest`: `storage: database` (H2 の MySQL 互換モードで代用)。1 MiB ごとの分け方、中身 → `msc_hosted_file` の書く順と、消す順、途中で失敗したときに行を残さないこと、
+  変わったところだけ書くこと、壊れた行の扱い、`files` からの取り込み (2 回目は二重にしない)、IP の HMAC (IPv4 射影の扱い。別の実装で計算した値と突き合わせ)、`msc_client` の更新。
 - `marumasign3d.test.js`: URL・データの検証、大きさの上限、**MarumaSign 本体の `SignImage` が出した 300 通りの頂点 (`src/test/js/reference-mesh.json`) との一致 (差は 1e-6 以下)**。
 
 実際のワールドの region ファイルで試すには、いくつかの `.mca` をフォルダに入れて次のようにします (中身を出力します)。
@@ -237,6 +289,8 @@ gradle test -Dmarumasign.sampleRegions=<region ファイルのフォルダ>
 1. `gradle shadowJar` で JAR を作り、サーバーの `plugins/` に置きます。旧名の `BlueMapMarumaSign-*.jar` があれば取り除きます (`plugin_jars_old_*` に退避。両方入れると二重に動きます)。
 2. 地図に出すなら、BlueMap 5.x (`bluemap-*-paper.jar`) か Dynmap (または両方) を `plugins/` に入れて、地図を設定します (なくても、ほかの機能は動きます)。
 3. ホストを使うなら、`config.yml` の `hosting` を設定し、`public-base-url` から内蔵の Web サーバー (既定 8110 番) に届くよう、逆プロキシを用意します。
+   `storage: database` なら、`hosting.database` をデータベース (本番は `jdbc:mysql://tidb:4000/marumasign`) にし、`public-base-url` を assets サーバーのアドレスにして、
+   `client-check.secret` を assets サーバーと同じ文字列にします (Paper が初回の起動で MySQL Connector/J を Maven Central から取ってきます)。
 4. サーバーを再起動します (ログイン中のプレイヤーがいないことを確認してから)。
 5. ログに `[<ワールド名>] Scan finished: ...` (BlueMap があれば `3D sign script installed in the BlueMap web root`、ホストが有効なら `Hosting is on: ...`) が出ます。
    初回は全 region を読むので時間がかかります。2 回目以降は更新された region だけです。
@@ -260,6 +314,7 @@ gradle test -Dmarumasign.sampleRegions=<region ファイルのフォルダ>
 - このプラグインのコードは私的な利用のためのもので、公開しません。
 - MarumaSign (MIT) の看板の形式と URL の確認規則、画像の位置・回転の計算を参考に、同じ判定・計算を自前で書いています (テスト用の頂点データは本体が出力したものです)。
 - `paper-api` と `bluemap-api` (MIT) と `gson` (Apache-2.0) はビルド時の参照だけで、JAR に含めません (サーバーが持っているものを使います)。
+- MySQL Connector/J (GPLv2 + Universal FOSS Exception) は JAR に含めず、Paper が `plugin.yml` の `libraries` で読み込みます。H2 (MPL 2.0 / EPL 1.0) はテストだけで使います。
 - Kotlin の標準ライブラリ (Apache-2.0) は JAR に含めます (パッケージを移しています)。
   Web 側のスクリプトは、BlueMap が公開している three.js (`BlueMap.Three`) を使います。
 

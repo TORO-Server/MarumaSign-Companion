@@ -10,7 +10,6 @@ import java.io.IOException
 import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.StandardCopyOption
 import java.util.ArrayDeque
 import java.util.Locale
 import java.util.concurrent.Executors
@@ -27,7 +26,8 @@ import java.util.logging.Logger
  * 2. ホストしたら、その URL の看板を、ホスト先の URL に書き換える ([SignRewriter])。チャンクが読み込まれていなければ、読み込まれたときに。
  * 3. どの看板にも使われなくなってから unhost-after-days たったファイルは、ホストをやめて消す。
  *
- * 状態は hosting.json ([HostedStore])。処理はこのクラスの 1 本のスレッドで行い、看板の書き換えだけメインスレッドで行う。
+ * 状態は [HostedStore]。ファイルの中身と状態の置き場所は [HostingStorage] (files: フォルダと hosting.json、database: データベース)。
+ * 処理はこのクラスの 1 本のスレッドで行い、看板の書き換えだけメインスレッドで行う (データベースの読み書きもこのスレッド)。
  */
 internal class HostingManager(
     private val plugin: JavaPlugin,
@@ -53,26 +53,30 @@ internal class HostingManager(
     private val kickPending = AtomicBoolean()
     private val downloads = ArrayDeque<Long>()
     private var storageWarned = false
+    private var loadFailures = 0
+
+    /** storage: database では、以前の files の hosting.json とフォルダを最初に取り込む */
+    private val storage: HostingStorage = if (cfg.usesDatabase) {
+        DbHostingStorage(logger, DbHostingStorage.connect(cfg, logger), cfg.tablePrefix, Db.displayUrl(cfg.dbUrl), stateFile, directory, clock)
+    } else {
+        FileHostingStorage(logger, directory, stateFile, clock)
+    }
+    private val stateName = if (cfg.usesDatabase) "the database" else "hosting.json"
+
+    // 保存してある状態を読めたか。読めるまでは、ホストの処理も保存もしない (空の状態で上書きしないように)
+    @Volatile
+    private var loaded = false
 
     // 書き換え待ちの看板があるチャンク (world:cx:cz)。チャンクが読み込まれたときに見る
     @Volatile
     private var pendingChunks: Set<String> = setOf()
 
     fun start() {
-        try {
-            store.load(stateFile)
-        } catch (e: IOException) {
-            val aside = stateFile.resolveSibling("hosting.json.corrupt-" + clock())
-            try {
-                Files.move(stateFile, aside, StandardCopyOption.REPLACE_EXISTING)
-            } catch (ignored: IOException) {
-                // 退避できなくても、空から始める
-            }
-            logger.warning("hosting.json was broken; moved it aside and starting empty")
-        }
-        Files.createDirectories(directory)
+        if (!cfg.usesDatabase) Files.createDirectories(directory)
         cleanTmp()
-        if (cfg.port > 0) {
+        if (cfg.usesDatabase) {
+            logger.info("Hosting: files are kept in the database (${Db.displayUrl(cfg.dbUrl)}) for another server to serve at ${cfg.publicBaseUrl}; the built-in web server is off")
+        } else if (cfg.port > 0) {
             try {
                 val s = HostingServer(cfg.bind, cfg.port, directory) { id -> store.files[id] }
                 s.start()
@@ -91,21 +95,67 @@ internal class HostingManager(
         }
         executor = e
         Bukkit.getPluginManager().registerEvents(this, plugin)
+        e.execute { safely { loadState() } }
         e.scheduleWithFixedDelay({ safely { tick() } }, 1, 10, TimeUnit.MINUTES)
         e.scheduleWithFixedDelay({ safely { saveIfDirty() } }, 5, 5, TimeUnit.MINUTES)
+    }
+
+    /** 保存してある状態を読む。データベースにつながらなければ、1 分ごとにやり直す */
+    private fun loadState() {
+        if (loaded) return
+        try {
+            storage.load(store)
+            loaded = true
+            if (cfg.usesDatabase) logger.info("Hosting: loaded ${store.files.size} hosted files from the database")
+        } catch (e: Exception) {
+            store.clear()
+            if (loadFailures++ == 0) logger.warning("Hosting: could not load the state from $stateName (${SafeText.clean(e.message ?: e.javaClass.simpleName, 200)}); hosting waits and tries again every minute")
+            try {
+                executor?.schedule({ safely { loadState() } }, 1, TimeUnit.MINUTES)
+            } catch (ex: RuntimeException) {
+                // 止まっている途中
+            }
+        }
     }
 
     fun stop() {
         server?.stop()
         server = null
-        executor?.shutdownNow()
+        val e = executor
         executor = null
+        e?.shutdownNow()
+        // 読めていない状態を書くと、保存してあった状態を空で上書きしてしまう
+        if (!loaded) {
+            storage.close()
+            return
+        }
+        if (!cfg.usesDatabase) {
+            saveNow()
+            return
+        }
         try {
-            store.save(stateFile)
-        } catch (e: IOException) {
-            logger.warning("Hosting: could not save hosting.json: $e")
+            e?.awaitTermination(5, TimeUnit.SECONDS)
+        } catch (ex: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
+        // データベースへの最後の保存は、メインスレッドでしない (待つのは 15 秒まで)
+        val t = Thread({
+            saveNow()
+            storage.close()
+        }, "MarumaSignCompanion-hosting-save")
+        t.isDaemon = true
+        t.start()
+        try {
+            t.join(15_000)
+        } catch (ex: InterruptedException) {
+            Thread.currentThread().interrupt()
         }
     }
+
+    /** /marumasign hosting status に出す、保存先の行 */
+    fun describeStorage(): List<String> = storage.describe() + if (loaded) listOf() else listOf("保存してある状態をまだ読めていません (ホストは待っています)")
+
+    val storageKind: String get() = storage.kind
 
     /** 看板が変わったときなど。30 秒以内のものはまとめて 1 回 */
     fun kick() {
@@ -122,7 +172,7 @@ internal class HostingManager(
     }
 
     /** このプラグインがホストしている URL か (リンクの検査に出さない。自分には検査でつながないため) */
-    fun isHostedUrl(url: String): Boolean = hostedId(url) != null
+    fun isHostedUrl(url: String): Boolean = if (loaded) hostedId(url) != null else url.startsWith(base)
 
     private fun hostedId(url: String): String? {
         if (!url.startsWith(base)) return null
@@ -139,6 +189,7 @@ internal class HostingManager(
     // ---- 定期の処理 ----
 
     internal fun tick() {
+        if (!loaded) return
         val now = clock()
         val byUrl = HashMap<String, MutableList<Pair<String, SignRecord>>>()
         for ((world, list) in signs()) {
@@ -241,9 +292,8 @@ internal class HostingManager(
     private fun host(url: String, r: HostFetcher.Fetched, now: Long): HostedStore.HostedFile {
         val existing = store.files[r.id]
         val f = existing ?: HostedStore.HostedFile(r.id, r.ext, r.size, now, now)
-        val target = directory.resolve(f.fileName)
-        if (existing == null || !Files.isRegularFile(target)) {
-            Files.move(r.file, target, StandardCopyOption.REPLACE_EXISTING)
+        if (existing == null || !storage.has(f)) {
+            storage.put(f, r.file)
         } else {
             Files.deleteIfExists(r.file)
         }
@@ -327,7 +377,7 @@ internal class HostingManager(
         val e = executor ?: return done(null)
         e.execute {
             safely {
-                val f = store.remove(id)
+                val f = if (loaded) store.remove(id) else null
                 if (f != null) {
                     store.denied.addAll(f.sources)
                     deleteFile(f)
@@ -353,19 +403,23 @@ internal class HostingManager(
     // ---- その他 ----
 
     private fun saveIfDirty() {
-        if (!store.dirty) return
+        if (!loaded || !store.dirty) return
+        saveNow()
+    }
+
+    private fun saveNow() {
         try {
-            store.save(stateFile)
+            storage.save(store)
         } catch (e: IOException) {
-            logger.warning("Hosting: could not save hosting.json: $e")
+            logger.warning("Hosting: could not save $stateName: $e")
         }
     }
 
     private fun deleteFile(f: HostedStore.HostedFile) {
         try {
-            Files.deleteIfExists(directory.resolve(f.fileName))
+            storage.delete(f)
         } catch (e: IOException) {
-            logger.warning("Hosting: could not delete ${f.fileName}: ${e.javaClass.simpleName}")
+            logger.warning("Hosting: could not delete ${f.fileName}: ${if (cfg.usesDatabase) e.message?.let { SafeText.clean(it, 200) } else e.javaClass.simpleName}")
         }
     }
 

@@ -209,13 +209,31 @@ web3d:
 #  - 管理者は /marumasign hosting remove <id> で取り下げられます (元の URL はもうホストせず、看板は元の URL に戻します)
 # 公開するには、内蔵の Web サーバー (port) の前に HTTPS の逆プロキシ (Cloudflare Tunnel や nginx) を置き、そのアドレスを public-base-url にします。
 # 外の Web サーバーに配らせるときは、port: 0 にして、directory をその Web サーバーの公開フォルダにします。
+# storage: database では、ファイルも状態もデータベースに入れ、データベースを読む別の assets サーバーが配ります (内蔵の Web サーバーは使いません)。
 hosting:
   enabled: false
   # 看板に書く URL の頭 (例 https://signs.example.net)。看板は文字数が限られるので短く (100 文字まで)。http(s) で、? # @ を含まない
   public-base-url: ""
-  # ファイルを置くフォルダ (空ならこのプラグインのフォルダの hosted)
+  # files: このプラグインのフォルダ (または directory) と hosting.json。database: 下のデータベース (TiDB / MySQL) に入れ、内蔵の Web サーバーは使わない
+  # files から database に変えると、最初の起動で hosting.json とフォルダのファイルをデータベースに取り込み、hosting.json を hosting.json.migrated にします (フォルダは消しません)
+  storage: files
+  database:
+    # データベースがなければ作ります (表も)
+    url: "jdbc:mysql://tidb:4000/marumasign"
+    user: "root"
+    password: ""
+    # 表の名前の頭 (英数字と _ だけ)
+    table-prefix: "msc_"
+  client-check:
+    # ホスト先を読める人を、いま遊んでいるプレイヤーの IP に絞るための記録 (storage: database のときだけ)
+    enabled: true
+    # assets サーバーと同じ秘密の文字列 (空なら記録しない)。IP はこれで HMAC-SHA256 にしてから保存する
+    secret: ""
+    # ログアウトしてからも読めるようにしておく時間 (分)。assets サーバーが使う
+    grace-minutes: 10
+  # ファイルを置くフォルダ (空ならこのプラグインのフォルダの hosted)。storage: database では、取り込むときに読むだけ
   directory: ""
-  # 内蔵の Web サーバー。0 なら使わない
+  # 内蔵の Web サーバー。0 なら使わない (storage: database では使わない)
   bind: 0.0.0.0
   port: 8110
   # 正常と確かめてから、ホストするまでの時間 (時間)

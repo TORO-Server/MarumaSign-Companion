@@ -157,6 +157,9 @@ class MarumaSignCompanion : JavaPlugin() {
             }
         }
         backends.clear()
+        val ct = clients
+        clients = null
+        ct?.stop()
         val h = hosting
         hosting = null
         h?.stop()
@@ -260,7 +263,12 @@ class MarumaSignCompanion : JavaPlugin() {
                 sender.sendMessage(Component.text("ホスト: " + st.files.size + " 件 / " + total / (1024 * 1024) + " MB (上限 " + settings.hosting.maxTotalMb + " MB)", NamedTextColor.GOLD))
                 sender.sendMessage(Component.text("候補 " + st.candidates.size + " / 書き換え待ちの看板 " + st.rewrites.size + " / ホストしない URL " + st.failures.size
                         + " / 取り下げ " + st.denied.size, NamedTextColor.WHITE))
-                sender.sendMessage(Component.text("配信先: " + settings.hosting.publicBaseUrl + " (フォルダ " + h.directory + ")", NamedTextColor.GRAY))
+                sender.sendMessage(Component.text("配信先: " + settings.hosting.publicBaseUrl, NamedTextColor.GRAY))
+                for (line in h.describeStorage()) sender.sendMessage(Component.text(line, NamedTextColor.GRAY))
+                if (h.storageKind == HostingSettings.DATABASE) {
+                    val ct = clients
+                    sender.sendMessage(Component.text(ct?.describe() ?: "接続しているクライアントの記録: 無効 (hosting.client-check.enabled と secret)", NamedTextColor.GRAY))
+                }
             }
         }
     }
@@ -292,7 +300,29 @@ class MarumaSignCompanion : JavaPlugin() {
             logger.info("Hosting is on: working URLs on signs are copied to ${hs.publicBaseUrl} and the signs are rewritten to point there")
         } catch (e: IOException) {
             logger.warning("Hosting could not start: $e")
+            return
         }
+        startClientCheck(hs)
+    }
+
+    @Volatile
+    private var clients: ClientTracker? = null
+
+    /** assets サーバーが確かめられるよう、いま遊んでいるプレイヤーの IP (の HMAC) をデータベースに記録する */
+    private fun startClientCheck(hs: HostingSettings) {
+        if (!hs.clientCheckEnabled) return
+        if (!hs.usesDatabase) {
+            if (hs.clientSecret.isNotEmpty()) logger.info("hosting.client-check only works with hosting.storage: database; client IPs are not recorded")
+            return
+        }
+        if (hs.clientSecret.isEmpty()) {
+            logger.warning("hosting.client-check.secret is empty; client IPs are not recorded (the assets server cannot check players)")
+            return
+        }
+        val ct = ClientTracker(this, logger, DbHostingStorage.connect(hs, logger), hs.tablePrefix, hs.clientSecret)
+        ct.start()
+        clients = ct
+        logger.info("Hosting: recording the clients that are playing (as HMAC-SHA256 of their IP) in the database for the assets server")
     }
 
     /** 旧名 (BlueMapMarumaSign) のフォルダがあれば、設定・キャッシュ・検査の結果を引き継ぐ (旧フォルダは残す) */

@@ -2,6 +2,7 @@ package net.torosaba.marumasign.companion
 
 import com.google.gson.Gson
 import com.google.gson.JsonArray
+import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import java.io.IOException
@@ -12,7 +13,8 @@ import java.nio.file.StandardCopyOption
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * ホストしているファイルと、ホストの途中の状態 (候補・失敗・書き換え待ちの看板・取り下げた URL)。hosting.json に保存する。
+ * ホストしているファイルと、ホストの途中の状態 (候補・失敗・書き換え待ちの看板・取り下げた URL)。
+ * 保存先は [HostingStorage] (hosting.json か、データベース)。
  * 書き換えるのは [HostingManager] のスレッドだけ。Web サーバーなどほかのスレッドは読むだけ。
  */
 class HostedStore {
@@ -89,19 +91,7 @@ class HostedStore {
             fs.add(o)
         }
         root.add("files", fs)
-        root.add("candidates", JsonObject().apply { candidates.forEach { (k, v) -> addProperty(k, v) } })
-        root.add("failures", JsonObject().apply {
-            failures.forEach { (k, v) -> add(k, JsonObject().apply { addProperty("reason", v.reason.name); addProperty("retryAt", v.retryAt) }) }
-        })
-        val rw = JsonArray()
-        for (r in rewrites.values) {
-            rw.add(JsonObject().apply {
-                addProperty("world", r.world); addProperty("x", r.x); addProperty("y", r.y); addProperty("z", r.z)
-                addProperty("from", r.from); addProperty("to", r.to)
-            })
-        }
-        root.add("rewrites", rw)
-        root.add("denied", JsonArray().apply { denied.forEach { add(it) } })
+        for (name in STATE_NAMES) root.add(name, stateJson(name))
         Files.createDirectories(file.parent)
         val tmp = file.resolveSibling("${file.fileName}.tmp")
         Files.newBufferedWriter(tmp, StandardCharsets.UTF_8).use { Gson().toJson(root, it) }
@@ -118,32 +108,72 @@ class HostedStore {
             if (root.get("version").asInt != VERSION) return
             for (e in root.getAsJsonArray("files")) {
                 val o = e.asJsonObject
-                val id = o.get("id").asString
-                val ext = o.get("ext").asString
-                require(id.matches(ID) && ext.matches(EXT)) { "bad id" }
-                val f = HostedFile(id, ext, o.get("size").asLong.also { require(it >= 0) }, o.get("hostedAt").asLong, o.get("lastUsedAt").asLong)
+                val f = checkedFile(o.get("id").asString, o.get("ext").asString, o.get("size").asLong, o.get("hostedAt").asLong, o.get("lastUsedAt").asLong)
                 for (s in o.getAsJsonArray("sources")) f.sources.add(checkUrl(s.asString))
                 for ((k, v) in o.getAsJsonObject("origins").entrySet()) f.origins[checkKey(k)] = checkUrl(v.asString)
                 add(f)
             }
-            for ((k, v) in root.getAsJsonObject("candidates").entrySet()) candidates[checkUrl(k)] = v.asLong
-            for ((k, v) in root.getAsJsonObject("failures").entrySet()) {
+            for (name in STATE_NAMES) readState(name, root.get(name))
+        } catch (e: RuntimeException) {
+            clear()
+            throw IOException("Broken hosting.json: ${e.javaClass.simpleName}", e)
+        }
+        dirty = false
+    }
+
+    /** すべて空にする (読み込みに失敗したとき) */
+    fun clear() {
+        files.clear(); bySource.clear(); candidates.clear(); failures.clear(); rewrites.clear(); denied.clear()
+    }
+
+    // ---- 状態の JSON (hosting.json の中と、データベースの state の行で同じ形) ----
+
+    /** 候補・失敗・書き換え待ち・取り下げのどれか ([STATE_NAMES]) を JSON にする */
+    fun stateJson(name: String): JsonElement = when (name) {
+        "candidates" -> JsonObject().apply { candidates.forEach { (k, v) -> addProperty(k, v) } }
+        "failures" -> JsonObject().apply {
+            failures.forEach { (k, v) -> add(k, JsonObject().apply { addProperty("reason", v.reason.name); addProperty("retryAt", v.retryAt) }) }
+        }
+        "rewrites" -> JsonArray().apply {
+            for (r in rewrites.values) {
+                add(JsonObject().apply {
+                    addProperty("world", r.world); addProperty("x", r.x); addProperty("y", r.y); addProperty("z", r.z)
+                    addProperty("from", r.from); addProperty("to", r.to)
+                })
+            }
+        }
+        "denied" -> JsonArray().apply { denied.forEach { add(it) } }
+        else -> throw IllegalArgumentException(name)
+    }
+
+    /** [stateJson] の形を読む。型・範囲・URL を確かめ、おかしければ RuntimeException */
+    fun readState(name: String, e: JsonElement) {
+        when (name) {
+            "candidates" -> for ((k, v) in e.asJsonObject.entrySet()) candidates[checkUrl(k)] = v.asLong
+            "failures" -> for ((k, v) in e.asJsonObject.entrySet()) {
                 val o = v.asJsonObject
                 failures[checkUrl(k)] = Failure(HostingPolicy.Reject.valueOf(o.get("reason").asString), o.get("retryAt").asLong)
             }
-            for (e in root.getAsJsonArray("rewrites")) {
-                val o = e.asJsonObject
+            "rewrites" -> for (x in e.asJsonArray) {
+                val o = x.asJsonObject
                 val r = Rewrite(o.get("world").asString, o.get("x").asInt, o.get("y").asInt, o.get("z").asInt,
                     checkUrl(o.get("from").asString), checkUrl(o.get("to").asString))
                 checkKey(r.key)
                 rewrites[r.key] = r
             }
-            for (e in root.getAsJsonArray("denied")) denied.add(checkUrl(e.asString))
-        } catch (e: RuntimeException) {
-            files.clear(); bySource.clear(); candidates.clear(); failures.clear(); rewrites.clear(); denied.clear()
-            throw IOException("Broken hosting.json: ${e.javaClass.simpleName}", e)
+            "denied" -> for (x in e.asJsonArray) denied.add(checkUrl(x.asString))
+            else -> throw IllegalArgumentException(name)
         }
-        dirty = false
+    }
+
+    /** [readState] で読んだものを空にする (読み込みに失敗したとき) */
+    fun clearState(name: String) {
+        when (name) {
+            "candidates" -> candidates.clear()
+            "failures" -> failures.clear()
+            "rewrites" -> rewrites.clear()
+            "denied" -> denied.clear()
+        }
     }
 
     companion object {
@@ -152,15 +182,24 @@ class HostedStore {
         val ID = Regex("[a-z2-7]{12}")
         val EXT = Regex("[a-z0-9]{1,10}")
         private val WORLD = Regex("[^:\\p{Cntrl}]{1,64}")
+        /** ファイル以外の状態の名前 (hosting.json のキー、データベースの state の行の name) */
+        val STATE_NAMES = listOf("candidates", "failures", "rewrites", "denied")
 
         fun signKey(world: String, x: Int, y: Int, z: Int) = "$world:$x:$y:$z"
 
-        private fun checkUrl(url: String): String {
+        /** 保存してあったファイルの情報を確かめて作る。おかしければ RuntimeException */
+        internal fun checkedFile(id: String, ext: String, size: Long, hostedAt: Long, lastUsedAt: Long): HostedFile {
+            require(id.matches(ID) && ext.matches(EXT)) { "bad id" }
+            require(size >= 0) { "bad size" }
+            return HostedFile(id, ext, size, hostedAt, lastUsedAt)
+        }
+
+        internal fun checkUrl(url: String): String {
             require(url.length <= UrlFilter.MAX_URL_LENGTH && url.none { it < ' ' }) { "bad url" }
             return url
         }
 
-        private fun checkKey(key: String): String {
+        internal fun checkKey(key: String): String {
             val p = key.split(':')
             require(p.size == 4 && p[0].matches(WORLD) && p.drop(1).all { it.toIntOrNull() != null }) { "bad key" }
             return key

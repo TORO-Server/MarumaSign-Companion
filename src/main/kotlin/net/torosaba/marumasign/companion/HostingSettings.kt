@@ -21,13 +21,30 @@ class HostingSettings {
     var downloadTimeoutSeconds = 120
     var perHourLimit = 30
     var excludeHosts: List<String> = listOf()
+    /** files: フォルダと hosting.json。database: データベース (TiDB / MySQL) に入れ、内蔵の Web サーバーは使わない */
+    var storage = FILES
+    var dbUrl = "jdbc:mysql://tidb:4000/marumasign"
+    var dbUser = "root"
+    var dbPassword = ""
+    /** 表の名前の頭 (英数字と _ だけ) */
+    var tablePrefix = "msc_"
+    /** いま遊んでいるプレイヤーの IP (の HMAC) をデータベースに記録するか (storage: database のときだけ) */
+    var clientCheckEnabled = true
+    /** assets サーバーと同じ秘密の文字列。空なら記録しない */
+    var clientSecret = ""
+    /** ログアウトしてからも読めるようにしておく時間 (分)。assets サーバーが使う */
+    var clientGraceMinutes = 10
 
     val maxFileBytes: Long get() = maxFileMb * 1024L * 1024L
     val maxTotalBytes: Long get() = maxTotalMb * 1024L * 1024L
+    val usesDatabase: Boolean get() = storage == DATABASE
 
     companion object {
         // 看板は表に 320 文字。数値の分を残して、URL の頭はこれまで
         const val MAX_BASE_URL_LENGTH = 100
+        const val FILES = "files"
+        const val DATABASE = "database"
+        private val PREFIX = Regex("[A-Za-z0-9_]{0,32}")
 
         fun read(c: ConfigurationSection, warn: (String) -> Unit): HostingSettings {
             val h = HostingSettings()
@@ -48,6 +65,19 @@ class HostingSettings {
             h.perHourLimit = c.getInt("hosting.per-hour-limit", h.perHourLimit).coerceIn(1, 10_000)
             h.excludeHosts = c.getStringList("hosting.exclude-hosts").map { it.trim().lowercase(Locale.ROOT) }
                 .filter { it.matches(Regex("[a-z0-9.-]{1,253}")) }
+            val storage = c.getString("hosting.storage", h.storage)?.trim()?.lowercase(Locale.ROOT) ?: h.storage
+            if (storage == FILES || storage == DATABASE) h.storage = storage
+            else warn("Unknown hosting.storage '${SafeText.clean(storage, 40)}'; using ${h.storage}")
+            h.dbUrl = c.getString("hosting.database.url", h.dbUrl)?.trim() ?: h.dbUrl
+            if (h.usesDatabase && !h.dbUrl.startsWith("jdbc:")) warn("hosting.database.url must be a JDBC URL (jdbc:mysql://host:port/database)")
+            h.dbUser = c.getString("hosting.database.user", h.dbUser) ?: h.dbUser
+            h.dbPassword = c.getString("hosting.database.password", h.dbPassword) ?: h.dbPassword
+            val prefix = c.getString("hosting.database.table-prefix", h.tablePrefix)?.trim() ?: h.tablePrefix
+            if (prefix.matches(PREFIX)) h.tablePrefix = prefix
+            else warn("hosting.database.table-prefix may only use A-Z, a-z, 0-9 and _ (up to 32 characters); using ${h.tablePrefix}")
+            h.clientCheckEnabled = c.getBoolean("hosting.client-check.enabled", h.clientCheckEnabled)
+            h.clientSecret = c.getString("hosting.client-check.secret", "") ?: ""
+            h.clientGraceMinutes = c.getInt("hosting.client-check.grace-minutes", h.clientGraceMinutes).coerceIn(0, 1440)
             return h
         }
 

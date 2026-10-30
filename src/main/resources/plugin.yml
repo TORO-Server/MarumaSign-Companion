@@ -4,6 +4,9 @@ main: net.torosaba.marumasign.companion.MarumaSignCompanion
 api-version: '1.21'
 description: Companion for servers using MarumaSign - indexes the signs, checks and hosts their links, and shows them on BlueMap (3D) and Dynmap
 softdepend: [BlueMap, dynmap]
+# hosting.storage: database のときに使う JDBC ドライバー (JAR に入れず、Paper が Maven Central から読み込む)
+libraries:
+  - com.mysql:mysql-connector-j:9.7.0
 commands:
   marumasign:
     description: Status, rescan, reload, broken link and hosting tools for MarumaSign signs
