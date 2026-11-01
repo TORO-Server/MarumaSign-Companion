@@ -293,7 +293,8 @@ class MarumaSignCompanion : JavaPlugin() {
         val m = HostingManager(this, logger, hs, dataFolder.toPath().resolve("hosting.json"), fetcher, settings.allowedExtensions,
             signs = { worlds.mapValues { it.value.store.all() } },
             linkState = { url -> linkChecker?.state(url) },
-            onRewritten = { world, x, y, z, text, orient -> Bukkit.getWorld(world)?.let { signChanged(it, x, y, z, text, orient) } })
+            onRewritten = { world, x, y, z, text, orient -> Bukkit.getWorld(world)?.let { signChanged(it, x, y, z, text, orient) } },
+            onHosted = { for (b in backends) b.hostedChanged() })
         try {
             m.start()
             hosting = m
@@ -713,6 +714,9 @@ class MarumaSignCompanion : JavaPlugin() {
                     var interval = 0
                     val n = m["min-interval-seconds"]
                     if (n is Number) interval = LinkSettings.clamp(n.toInt(), 0, 3600)
+                    var perHour = 0
+                    val limit = m["per-hour-limit"]
+                    if (limit is Number) perHour = LinkSettings.clamp(limit.toInt(), 0, 10_000)
                     val paths = ArrayList<String>()
                     val list = m["removed-paths"]
                     if (list is List<*>) {
@@ -721,7 +725,7 @@ class MarumaSignCompanion : JavaPlugin() {
                             if (p.matches(PATH_PATTERN)) paths.add(p)
                         }
                     }
-                    rules.add(LinkSettings.HostRule(h, interval, paths))
+                    rules.add(LinkSettings.HostRule(h, interval, paths, perHour))
                 }
                 l.hostRules = rules
             }

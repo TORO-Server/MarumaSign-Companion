@@ -21,4 +21,8 @@ internal interface MapBackend {
     /** リンクの検査の結果が変わった (結果を使う地図だけが、マーカーを更新する) */
     fun linkStateChanged() {
     }
+
+    /** ホストしたファイルが増えた (3D 表示のデータなど、ホスト先の URL を使う地図だけが、書き出し直す) */
+    fun hostedChanged() {
+    }
 }

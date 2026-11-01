@@ -19,6 +19,8 @@ internal object WebExporter {
     const val FORMAT = 1
     private val TEXTURE_EXTENSIONS = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "avif")
 
+    fun isTextureExtension(ext: String): Boolean = TEXTURE_EXTENSIONS.contains(ext.lowercase(Locale.ROOT))
+
     /** 画像として読み込む URL。読めない・描けない種類は null */
     fun imageUrl(view: MarkerHtml.View): String? {
         if (!Orient.valid(view.sign.orient)) return null
@@ -49,7 +51,11 @@ internal object WebExporter {
 
     private val IMGUR_PATH = Regex("/[A-Za-z0-9]{5,10}\\.(png|jpe?g|gif|webp)")
 
-    fun write(file: Path, views: List<MarkerHtml.View>, settings: Settings) {
+    /**
+     * @param hostedImage 看板の URL をホストしているときの、ホスト先の画像の URL。画像として描く看板の画像だけを置き換える
+     *   (リンクの URL は看板のまま。ホスト先はプレイヤーと地図のページだけが読めるので、リンクには使わない)
+     */
+    fun write(file: Path, views: List<MarkerHtml.View>, settings: Settings, hostedImage: (MarkerHtml.View) -> String? = { null }) {
         Files.createDirectories(file.parent)
         val tmp = file.resolveSibling(file.fileName.toString() + ".tmp")
         Files.newBufferedWriter(tmp, StandardCharsets.UTF_8).use { out ->
@@ -76,7 +82,7 @@ internal object WebExporter {
                     w.value(s.x.toLong()).value(s.y.toLong()).value(s.z.toLong())
                     w.value(s.orient.toLong())
                     w.value(v.kind.ordinal.toLong())
-                    val image = imageUrl(v)
+                    val image = imageUrl(v)?.let { hostedImage(v) ?: it }
                     w.value(image ?: "")
                     w.value(v.url)
                     for (f in s.values) w.value(f as Number)

@@ -157,6 +157,7 @@ link-check:
   # 送る User-Agent (印字できる ASCII だけ)
   user-agent: MarumaSignCompanion-LinkCheck/1.0
   # ホストごとの決まり (そのホストと下のサブドメイン)。min-interval-seconds は間隔を長くする。
+  # per-hour-limit: そのホストの 1 時間あたりの上限 (検査とホストの読み込みの合計)。書かなければ host-per-hour-limit
   # removed-paths: 削除済みを 200 で返す置き換え画像のパス (そこへ転送されたら BROKEN)
   host-rules:
     - host: imgur.com

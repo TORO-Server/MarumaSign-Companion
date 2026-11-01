@@ -141,12 +141,20 @@ internal class BlueMapBackend(private val plugin: MarumaSignCompanion) : MapBack
             val views = plugin.views3d(w)
             for (map in value) {
                 try {
-                    WebExporter.write(root.resolve("marumasign").resolve(safeId(map.id) + ".json"), views, plugin.settings())
+                    val hosting = plugin.hosting()
+                    WebExporter.write(root.resolve("marumasign").resolve(safeId(map.id) + ".json"), views, plugin.settings()) { v ->
+                        // 短縮 URL は、看板に書かれた URL (v.sign.url) でホストしている。行き先の URL (v.url) でホストしていることもある
+                        hosting?.hostedImageUrl(v.sign.url, v.url)
+                    }
                 } catch (ex: IOException) {
                     plugin.logger.warning("[$key] Could not write 3D sign data: $ex")
                 }
             }
         }
+    }
+
+    override fun hostedChanged() {
+        scheduleExport()
     }
 
     // 看板が変わったら、少し待ってからまとめて書き出す

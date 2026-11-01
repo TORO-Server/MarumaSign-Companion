@@ -41,6 +41,8 @@ internal class HostingManager(
     private val linkState: (String) -> LinkState?,
     /** 看板を書き換えたあと (メインスレッドで呼ぶ) */
     private val onRewritten: (world: String, x: Int, y: Int, z: Int, text: String, orient: Int) -> Unit,
+    /** 新しいファイルをホストしたあと (このクラスのスレッドで、1 回の処理に 1 回。地図のデータを書き出し直す) */
+    private val onHosted: () -> Unit = {},
     private val clock: () -> Long = System::currentTimeMillis,
 ) : Listener {
 
@@ -186,6 +188,21 @@ internal class HostingManager(
 
     fun urlOf(f: HostedStore.HostedFile): String = base + f.fileName
 
+    /**
+     * 地図が画像として読む URL。sources のどれかをホストしていれば、ホスト先の URL (画像として描ける形式だけ)。
+     * 看板の文字の書き換えはチャンクが読み込まれるまで待つので、書き換え前でも地図はホスト先から読める。
+     */
+    fun hostedImageUrl(vararg sources: String): String? {
+        for (s in sources) {
+            val f = store.bySource[s]?.let { store.files[it] } ?: continue
+            if (WebExporter.isTextureExtension(f.ext)) return urlOf(f)
+        }
+        return null
+    }
+
+    // 新しくホストしたファイルがあるか (tick の中だけで使う)
+    private var hostedSomething = false
+
     // ---- 定期の処理 ----
 
     internal fun tick() {
@@ -215,6 +232,21 @@ internal class HostingManager(
         refreshPendingChunks()
         applyRewrites(store.rewrites.values.toList())
         saveIfDirty()
+        notifyHosted(now, 0)
+    }
+
+    private var lastHostedNotify = 0L
+
+    /** 新しくホストしたファイルがあれば、minGap ミリ秒以上あいていたら知らせる (1 回の処理が長いあいだも、地図を少しずつ新しくする) */
+    private fun notifyHosted(now: Long, minGap: Long) {
+        if (!hostedSomething || now - lastHostedNotify < minGap) return
+        hostedSomething = false
+        lastHostedNotify = now
+        try {
+            onHosted()
+        } catch (e: RuntimeException) {
+            logger.warning("Hosting: could not update the map data: ${e.javaClass.simpleName}")
+        }
     }
 
     private fun queueRewrite(world: String, s: SignRecord, from: String, to: String) {
@@ -276,6 +308,7 @@ internal class HostingManager(
                 is HostFetcher.Fetched -> {
                     val f = host(url, r, now)
                     for ((world, s) in byUrl[url].orEmpty()) queueRewrite(world, s, url, urlOf(f))
+                    notifyHosted(clock(), HOSTED_NOTIFY_MILLIS)
                 }
                 is HostFetcher.Rejected -> {
                     store.candidates.remove(url)
@@ -300,6 +333,7 @@ internal class HostingManager(
         f.sources.add(url)
         store.candidates.remove(url)
         store.add(f)
+        hostedSomething = true
         if (existing == null) logger.info("Hosting: now hosting ${f.fileName} (${r.size / 1024} KB) for ${SafeText.logUrl(url)}")
         else logger.info("Hosting: ${SafeText.logUrl(url)} has the same content as ${f.fileName}; using that file")
         return f
@@ -442,6 +476,7 @@ internal class HostingManager(
         private const val HOUR = 3_600_000L
         private const val DAY = 24 * HOUR
         private const val REWRITES_PER_TICK = 50
+        private const val HOSTED_NOTIFY_MILLIS = 120_000L
 
         private fun chunkKey(world: String, cx: Int, cz: Int) = "$world:$cx:$cz"
 

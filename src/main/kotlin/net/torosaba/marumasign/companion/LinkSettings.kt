@@ -8,6 +8,8 @@ class LinkSettings {
         val host: String,
         val minIntervalSeconds: Int,
         val removedPaths: List<String>,
+        /** そのホストの 1 時間あたりの上限 (検査とホストの読み込みの合計)。0 なら hostPerHourLimit */
+        val perHourLimit: Int = 0,
     )
 
     var enabled = true
@@ -45,6 +47,12 @@ class LinkSettings {
             }
         }
         return best
+    }
+
+    /** そのホストの 1 時間あたりの上限。ホストごとの決まりに書いてあればそれ、なければ hostPerHourLimit */
+    fun hostLimit(host: String?): Int {
+        val r = ruleFor(host)?.perHourLimit ?: 0
+        return if (r > 0) r else hostPerHourLimit
     }
 
     fun minIntervalMillis(host: String?): Int {

@@ -30,7 +30,7 @@ internal class HostThrottle(private val cfg: LinkSettings) {
     fun isReady(h: String, now: Long): Boolean {
         val x = host(h, now)
         prune(x.starts, now)
-        return x.nextFree <= now && x.penalizedUntil <= now && x.starts.size < cfg.hostPerHourLimit
+        return x.nextFree <= now && x.penalizedUntil <= now && x.starts.size < cfg.hostLimit(h)
     }
 
     /**
@@ -41,7 +41,7 @@ internal class HostThrottle(private val cfg: LinkSettings) {
     fun reserve(h: String, now: Long): Long {
         val x = host(h, now)
         prune(x.starts, now)
-        if (x.starts.size >= cfg.hostPerHourLimit) return -1
+        if (x.starts.size >= cfg.hostLimit(h)) return -1
         val at = Math.max(now, Math.max(x.nextFree, x.penalizedUntil))
         x.starts.addLast(at)
         val interval = cfg.minIntervalMillis(h).toLong()
