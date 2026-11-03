@@ -221,6 +221,15 @@ internal class DynmapBackend(private val plugin: MarumaSignCompanion) : MapBacke
     }
 
     private fun checked(checker: LinkChecker, world: String, sign: SignRecord, byUrl: Map<String, List<SignRef>>, now: Long): Desired? {
+        if (plugin.isSelfHostedUrl(sign.url)) {
+            // ホストされた看板は自サーバーが管理・保持している正常な画像。リンク切れや要確認には出さない
+            if (plugin.settings().dynmapShowOk) {
+                val view = plugin.classify(sign) ?: return null
+                return Desired(Layer.OK, world, sign.x + 0.5, sign.y + 0.5, sign.z + 0.5,
+                    plugin.markerHtml().label(view), plugin.markerHtml().html(view, POPUP_SIZE))
+            }
+            return null
+        }
         val st = checker.state(sign.url) ?: return null
         val x = sign.x + 0.5
         val y = sign.y + 0.5

@@ -30,7 +30,7 @@ import java.util.logging.Logger
  * 処理はこのクラスの 1 本のスレッドで行い、看板の書き換えだけメインスレッドで行う (データベースの読み書きもこのスレッド)。
  */
 internal class HostingManager(
-    private val plugin: JavaPlugin,
+    private val plugin: JavaPlugin? = null,
     private val logger: Logger,
     private val cfg: HostingSettings,
     private val stateFile: Path,
@@ -47,8 +47,8 @@ internal class HostingManager(
 ) : Listener {
 
     val store = HostedStore()
-    val directory: Path = if (cfg.directory.isEmpty()) plugin.dataFolder.toPath().resolve("hosted") else Path.of(cfg.directory)
-    private val tmpDir: Path = plugin.dataFolder.toPath().resolve("hosting-tmp")
+    val directory: Path = if (cfg.directory.isNotEmpty()) Path.of(cfg.directory) else (plugin?.dataFolder?.toPath() ?: Path.of(".")).resolve("hosted")
+    private val tmpDir: Path = directory.resolveSibling("hosting-tmp")
     private val base = cfg.publicBaseUrl + "/"
     private var server: HostingServer? = null
     private var executor: ScheduledExecutorService? = null
@@ -96,7 +96,7 @@ internal class HostingManager(
             Thread(r, "MarumaSignCompanion-hosting").apply { isDaemon = true; priority = Thread.MIN_PRIORITY }
         }
         executor = e
-        Bukkit.getPluginManager().registerEvents(this, plugin)
+        plugin?.let { Bukkit.getPluginManager().registerEvents(this, it) }
         e.execute { safely { loadState() } }
         e.scheduleWithFixedDelay({ safely { tick() } }, 1, 10, TimeUnit.MINUTES)
         e.scheduleWithFixedDelay({ safely { saveIfDirty() } }, 5, 5, TimeUnit.MINUTES)
@@ -173,8 +173,8 @@ internal class HostingManager(
         }
     }
 
-    /** このプラグインがホストしている URL か (リンクの検査に出さない。自分には検査でつながないため) */
-    fun isHostedUrl(url: String): Boolean = if (loaded) hostedId(url) != null else url.startsWith(base)
+    /** このプラグインがホストしている (またはこのサーバーが配信する) URL か (リンクの検査に出さない。自分には検査でつながないため) */
+    fun isHostedUrl(url: String): Boolean = url.startsWith(base)
 
     private fun hostedId(url: String): String? {
         if (!url.startsWith(base)) return null
@@ -345,7 +345,7 @@ internal class HostingManager(
 
     /** 書き換えをメインスレッドで試す。結果はこのクラスのスレッドで受け取る */
     private fun applyRewrites(list: List<HostedStore.Rewrite>) {
-        if (list.isEmpty() || !plugin.isEnabled) return
+        if (list.isEmpty() || plugin?.isEnabled != true) return
         for (batch in list.chunked(REWRITES_PER_TICK)) {
             Bukkit.getScheduler().runTask(plugin, Runnable {
                 val results = batch.map { r ->

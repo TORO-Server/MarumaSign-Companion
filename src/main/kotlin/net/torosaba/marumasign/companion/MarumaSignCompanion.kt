@@ -76,7 +76,7 @@ class MarumaSignCompanion : JavaPlugin() {
             val throttle = HostThrottle(settings.link)
             val probe = LinkProbe.create(settings.link, filter, throttle)
             val checker = LinkChecker(logger, dataFolder.toPath().resolve("linkcheck.json"), settings.link,
-                Predicate { url -> probe.strictParse(url) != null }, probe.asProber(), throttle,
+                Predicate { url -> probe.strictParse(url) != null && !isSelfHostedUrl(url) }, probe.asProber(), throttle,
                 LongSupplier { System.currentTimeMillis() }, Runnable { linkStateChanged() })
             checker.start()
             linkChecker = checker
@@ -278,6 +278,14 @@ class MarumaSignCompanion : JavaPlugin() {
 
     internal fun hosting(): HostingManager? = hosting
 
+    /** 自サーバーがホストしている (または配信先として設定された) URL か (リンク検査・要確認の対象外) */
+    internal fun isSelfHostedUrl(url: String): Boolean {
+        val h = hosting
+        if (h != null) return h.isHostedUrl(url)
+        val base = settings.hosting.publicBaseUrl
+        return base.isNotEmpty() && (url == base || url.startsWith("$base/"))
+    }
+
     private fun startHosting(filter: UrlFilter, throttle: HostThrottle, probe: LinkProbe) {
         val hs = settings.hosting
         if (!hs.enabled) return
@@ -432,7 +440,7 @@ class MarumaSignCompanion : JavaPlugin() {
         val urls = HashSet<String>()
         for (w in worlds.values) {
             // ホストしている URL は、このサーバー自身なので検査しない (自分にはつながない決まり)
-            for (s in w.store.all()) if (h == null || !h.isHostedUrl(s.url)) urls.add(s.url)
+            for (s in w.store.all()) if (!isSelfHostedUrl(s.url)) urls.add(s.url)
         }
         checker.track(urls)
         h?.kick()
@@ -641,7 +649,7 @@ class MarumaSignCompanion : JavaPlugin() {
         val record = SignRecord(x, y, z, spec.url, spec.values, orient)
         w.store.liveSet(record)
         val checker = linkChecker
-        checker?.prioritize(record.url)
+        if (!isSelfHostedUrl(record.url)) checker?.prioritize(record.url)
         hosting?.kick()
         val view = classify(record)
         val worldName = world.name

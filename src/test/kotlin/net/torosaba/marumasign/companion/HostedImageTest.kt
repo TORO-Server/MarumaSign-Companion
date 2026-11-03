@@ -76,4 +76,24 @@ internal class HostedImageTest {
         assertTrue(!WebExporter.isTextureExtension("mp4"))
         assertTrue(!WebExporter.isTextureExtension("svg"))
     }
+
+    @Test
+    fun selfHostedUrlMatchesBaseRegardlessOfFilesList(@TempDir dir: Path) {
+        val hs = HostingSettings()
+        hs.publicBaseUrl = "https://assets.torosaba.net"
+        hs.directory = dir.resolve("hosted").toString()
+        val m = HostingManager(
+            null,
+            java.util.logging.Logger.getAnonymousLogger(),
+            hs,
+            dir.resolve("hosting.json"),
+            HostFetcher(SafeHttp(SafeHttp.Options()), { null }, HostThrottle(LinkSettings()), 5, setOf("png")),
+            setOf("png"),
+            { mapOf() },
+            { null },
+            { _, _, _, _, _, _ -> }
+        )
+        assertTrue(m.isHostedUrl("https://assets.torosaba.net/aaaaaaaaaaaa.png"), "base 配下の URL は登録有無に関わらず自前ホスト")
+        assertTrue(!m.isHostedUrl("https://example.com/aaaaaaaaaaaa.png"), "他のドメインは自前ホストではない")
+    }
 }
