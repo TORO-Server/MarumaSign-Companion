@@ -83,6 +83,8 @@ class HostingServer(
         val etag = "\"${file.id}\""
         h["Content-Type"] = HostingPolicy.contentTypeFor(file.ext)
         h["Cache-Control"] = "public, max-age=31536000, immutable"
+        h["X-Content-Type-Options"] = "nosniff"
+        h["Content-Security-Policy"] = "default-src 'none'; sandbox"
         h["ETag"] = etag
         h["Accept-Ranges"] = "bytes"
         if (ex.requestHeaders.getFirst("If-None-Match") == etag) {

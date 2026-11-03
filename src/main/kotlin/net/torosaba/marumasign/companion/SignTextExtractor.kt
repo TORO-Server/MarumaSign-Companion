@@ -397,12 +397,18 @@ object SignTextExtractor {
         buf.position(buf.position() + len)
     }
 
+    private const val MAX_DEPTH = 64
+    private const val MAX_ARRAY_SIZE = 65536
+
     private fun skipBytes(buf: ByteBuffer, count: Int, size: Int) {
-        if (count < 0) throw IllegalArgumentException("Negative length")
-        buf.position(buf.position() + count * size)
+        if (count < 0 || count > MAX_ARRAY_SIZE) throw IllegalArgumentException("Invalid length $count")
+        val bytes = count * size
+        if (bytes > buf.remaining()) throw IllegalArgumentException("Length exceeds buffer")
+        buf.position(buf.position() + bytes)
     }
 
-    private fun skip(buf: ByteBuffer, type: Int) {
+    private fun skip(buf: ByteBuffer, type: Int, depth: Int = 0) {
+        if (depth > MAX_DEPTH) throw IllegalArgumentException("Max NBT depth exceeded")
         when (type) {
             END -> {
             }
@@ -415,15 +421,16 @@ object SignTextExtractor {
             LIST -> {
                 val elementType = buf.get().toInt()
                 val count = buf.getInt()
+                if (count < 0 || count > MAX_ARRAY_SIZE) throw IllegalArgumentException("Invalid list count $count")
                 when (elementType) {
                     END -> {
                     }
-                    BYTE -> buf.position(buf.position() + count)
-                    SHORT -> buf.position(buf.position() + count * 2)
-                    INT, FLOAT -> buf.position(buf.position() + count * 4)
-                    LONG, DOUBLE -> buf.position(buf.position() + count * 8)
+                    BYTE -> skipBytes(buf, count, 1)
+                    SHORT -> skipBytes(buf, count, 2)
+                    INT, FLOAT -> skipBytes(buf, count, 4)
+                    LONG, DOUBLE -> skipBytes(buf, count, 8)
                     else -> {
-                        for (i in 0 until count) skip(buf, elementType)
+                        for (i in 0 until count) skip(buf, elementType, depth + 1)
                     }
                 }
             }
@@ -432,7 +439,7 @@ object SignTextExtractor {
                     val t = buf.get().toInt()
                     if (t == END) break
                     skipString(buf)
-                    skip(buf, t)
+                    skip(buf, t, depth + 1)
                 }
             }
             INT_ARRAY -> skipBytes(buf, buf.getInt(), 4)
