@@ -63,8 +63,8 @@ object RegionReader {
                 try {
                     val raw = readChunk(ch, start, Math.min(sectors * SECTOR.toLong(), size - start), dir, file, i) ?: continue
                     result.signs.addAll(SignTextExtractor.extract(raw))
-                } catch (e: Exception) {
-                    if (result.errors++ == 0) result.firstError = e
+                } catch (e: Throwable) {
+                    if (result.errors++ == 0) result.firstError = if (e is Exception) e else RuntimeException(e)
                 }
             }
         }
