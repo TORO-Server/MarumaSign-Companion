@@ -24,7 +24,8 @@ class HostingSettings {
     /** files: フォルダと hosting.json。database: データベース (TiDB / MySQL) に入れ、内蔵の Web サーバーは使わない */
     var storage = FILES
     var dbUrl = "jdbc:mysql://tidb:4000/marumasign"
-    var dbUser = "root"
+    /** 既定はなし。storage: database では、設定されていなければホストを始めない ([databaseCredentialProblem]) */
+    var dbUser = ""
     var dbPassword = ""
     /** 表の名前の頭 (英数字と _ だけ) */
     var tablePrefix = "msc_"
@@ -38,6 +39,19 @@ class HostingSettings {
     val maxFileBytes: Long get() = maxFileMb * 1024L * 1024L
     val maxTotalBytes: Long get() = maxTotalMb * 1024L * 1024L
     val usesDatabase: Boolean get() = storage == DATABASE
+
+    /** storage: database で、データベースのユーザーかパスワードが設定されていないときの説明 (ホストを始めない)。問題なければ null */
+    fun databaseCredentialProblem(): String? {
+        if (!usesDatabase) return null
+        val missing = listOfNotNull(
+            "hosting.database.user".takeIf { dbUser.isBlank() },
+            "hosting.database.password".takeIf { dbPassword.isBlank() },
+        )
+        return if (missing.isEmpty()) null else missing.joinToString(" and ") + " not set"
+    }
+
+    /** root で接続する設定か (動くが、このプラグイン専用のユーザーをすすめる) */
+    val usesRootDatabaseUser: Boolean get() = usesDatabase && dbUser.trim().equals("root", ignoreCase = true)
 
     companion object {
         // 看板は表に 320 文字。数値の分を残して、URL の頭はこれまで

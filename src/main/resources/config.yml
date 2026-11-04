@@ -221,7 +221,10 @@ hosting:
   database:
     # データベースがなければ作ります (表も)
     url: "jdbc:mysql://tidb:4000/marumasign"
-    user: "root"
+    # storage: database では user と password が必須です。どちらかが空なら、ホストを始めません (ほかの機能は動きます)。
+    # このプラグイン専用のユーザーを作って、このデータベースだけの権限を与えてください (表を確かめる CREATE TABLE IF NOT EXISTS があるので CREATE も要ります):
+    #   GRANT SELECT, INSERT, UPDATE, DELETE, CREATE ON marumasign.* TO '<ユーザー>'@'%';
+    user: ""
     password: ""
     # 表の名前の頭 (英数字と _ だけ)
     table-prefix: "msc_"

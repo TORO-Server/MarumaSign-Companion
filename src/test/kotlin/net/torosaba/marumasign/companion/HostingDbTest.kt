@@ -4,6 +4,7 @@ import org.bukkit.configuration.file.YamlConfiguration
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -407,7 +408,7 @@ class HostingDbTest {
             val h = HostingSettings.read(yaml) { throw AssertionError(it) }
             assertEquals("files", h.storage)
             assertEquals("jdbc:mysql://tidb:4000/marumasign", h.dbUrl)
-            assertEquals("root", h.dbUser)
+            assertEquals("", h.dbUser, "既定のユーザーはない")
             assertEquals("", h.dbPassword)
             assertEquals("msc_", h.tablePrefix)
             assertTrue(h.clientCheckEnabled)
@@ -426,6 +427,50 @@ class HostingDbTest {
         assertTrue(h.usesDatabase)
         assertEquals("msc_", h.tablePrefix)
         assertEquals(1, warnings.size)
+    }
+
+    private fun read(vararg values: Pair<String, Any>): HostingSettings {
+        val y = YamlConfiguration()
+        for ((k, v) in values) y.set(k, v)
+        return HostingSettings.read(y) { throw AssertionError(it) }
+    }
+
+    @Test
+    fun databaseStorageNeedsAUserAndAPassword() {
+        // files では使わない
+        assertNull(read().databaseCredentialProblem())
+        assertNull(read("hosting.storage" to "files").databaseCredentialProblem())
+
+        // 行がないとき、以前の既定 (root と空のパスワード) には戻らない
+        val absent = read("hosting.storage" to "database")
+        assertEquals("", absent.dbUser)
+        assertEquals("", absent.dbPassword)
+        assertEquals("hosting.database.user and hosting.database.password not set", absent.databaseCredentialProblem())
+
+        assertEquals("hosting.database.password not set",
+            read("hosting.storage" to "database", "hosting.database.user" to "marumasign").databaseCredentialProblem())
+        assertEquals("hosting.database.password not set",
+            read("hosting.storage" to "database", "hosting.database.user" to "root", "hosting.database.password" to "").databaseCredentialProblem(),
+            "root と空のパスワードを書いてあっても、つながない")
+        assertEquals("hosting.database.user not set",
+            read("hosting.storage" to "database", "hosting.database.password" to "x").databaseCredentialProblem())
+
+        val ok = read("hosting.storage" to "database", "hosting.database.user" to "marumasign", "hosting.database.password" to "x")
+        assertNull(ok.databaseCredentialProblem())
+        assertFalse(ok.usesRootDatabaseUser)
+
+        // root をパスワードつきで書いてあれば動かす (警告だけ)。問題の説明に値を出さない
+        val root = read("hosting.storage" to "database", "hosting.database.user" to "root", "hosting.database.password" to "x")
+        assertNull(root.databaseCredentialProblem())
+        assertTrue(root.usesRootDatabaseUser)
+    }
+
+    @Test
+    fun emptyExtraBlockedAddressesAreWarnedAbout() {
+        val warning = MarumaSignCompanion.extraBlockedAddressesWarning(AddressDenyList(listOf()))
+        assertTrue(warning!!.contains("link-check.extra-blocked-addresses"))
+        assertNotNull(MarumaSignCompanion.extraBlockedAddressesWarning(AddressDenyList(listOf("not an address"))), "読めるものがなければ空と同じ")
+        assertNull(MarumaSignCompanion.extraBlockedAddressesWarning(AddressDenyList(listOf("192.0.2.5"))))
     }
 
     @Test

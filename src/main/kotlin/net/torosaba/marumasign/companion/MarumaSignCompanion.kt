@@ -70,9 +70,11 @@ class MarumaSignCompanion : JavaPlugin() {
         }
         if (settings.link.enabled) {
             val filter = UrlFilter(settings.blockedHosts)
-            for (bad in AddressDenyList(settings.link.extraBlockedAddresses).rejected()) {
+            val denyList = AddressDenyList(settings.link.extraBlockedAddresses)
+            for (bad in denyList.rejected()) {
                 logger.warning("link-check.extra-blocked-addresses: ignoring an entry that is not an address or range: " + SafeText.logUrl(bad))
             }
+            extraBlockedAddressesWarning(denyList)?.let { logger.warning(it) }
             val throttle = HostThrottle(settings.link)
             val probe = LinkProbe.create(settings.link, filter, throttle)
             val checker = LinkChecker(logger, dataFolder.toPath().resolve("linkcheck.json"), settings.link,
@@ -222,7 +224,7 @@ class MarumaSignCompanion : JavaPlugin() {
     private fun hostingCommand(sender: CommandSender, args: Array<String>) {
         val h = hosting
         if (h == null) {
-            sender.sendMessage(Component.text("ホストは無効です (config.yml の hosting.enabled と hosting.public-base-url、link-check.enabled)。", NamedTextColor.YELLOW))
+            sender.sendMessage(Component.text("ホストは無効です (config.yml の hosting.enabled と hosting.public-base-url、link-check.enabled。storage: database では hosting.database.user と password も必要)。", NamedTextColor.YELLOW))
             return
         }
         val sub = if (args.size >= 2) args[1].lowercase(Locale.ROOT) else "status"
@@ -292,6 +294,16 @@ class MarumaSignCompanion : JavaPlugin() {
         if (hs.publicBaseUrl.isEmpty()) {
             logger.warning("hosting.enabled is true, but hosting.public-base-url is empty; hosting is off")
             return
+        }
+        val credentialProblem = hs.databaseCredentialProblem()
+        if (credentialProblem != null) {
+            logger.severe("hosting.storage is database, but $credentialProblem in config.yml; hosting is off. "
+                    + "Create a database user for this plugin and set both keys. The rest of the plugin keeps working, "
+                    + "but hosted files are not updated and the clients that are playing are not recorded for the assets server")
+            return
+        }
+        if (hs.usesRootDatabaseUser) {
+            logger.warning("hosting.database.user is root; use a database user that can only reach this plugin's database")
         }
         val o = SafeHttp.Options()
         o.connectTimeoutMillis = LinkSettings.clamp(settings.link.connectTimeoutSeconds, 1, 30) * 1000
@@ -686,6 +698,12 @@ class MarumaSignCompanion : JavaPlugin() {
 
     companion object {
         internal const val MARKER_SET_ID = "marumasign"
+
+        /** link-check.extra-blocked-addresses が空 (読めるものがない) ときの警告。起動のログに出す */
+        internal fun extraBlockedAddressesWarning(denyList: AddressDenyList): String? =
+            if (denyList.size() > 0) null
+            else "link-check.extra-blocked-addresses is empty: add this server's public IP address and WAN-side range, " +
+                "so that link checks and hosting do not connect back to this network (see config.yml)"
 
         /** config.yml の link-check を読む。値の範囲は収める (不正な値で検査が暴走しないように) */
         internal fun readLinkSettings(c: ConfigurationSection): LinkSettings {
