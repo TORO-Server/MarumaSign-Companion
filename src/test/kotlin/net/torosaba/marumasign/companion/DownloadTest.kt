@@ -153,6 +153,54 @@ class DownloadTest {
     }
 
     @Test
+    fun bodiesOverTheLimitWithoutADeclaredLengthAreTooLarge(@TempDir dir: Path) {
+        val plain = serve { sock, _ -> write(sock, "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\n\r\n", ByteArray(2000)) }
+        assertEquals(HostingPolicy.Reject.TOO_LARGE, (fetcher().fetch(uri(plain, "/a.png").toString(), dir, 1000, 5000) as HostFetcher.Rejected).reason)
+        val chunked = serve { sock, _ ->
+            write(sock, "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nTransfer-Encoding: chunked\r\n\r\n3e8\r\n" + "x".repeat(1000) + "\r\n3e8\r\n" + "x".repeat(1000) + "\r\n0\r\n\r\n")
+        }
+        assertEquals(HostingPolicy.Reject.TOO_LARGE, (fetcher().fetch(uri(chunked, "/a.png").toString(), dir, 1500, 5000) as HostFetcher.Rejected).reason)
+        // 途中で切れたものは、大きすぎるのではない
+        val short = serve { sock, _ -> write(sock, "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 100\r\n\r\n", ByteArray(10)) }
+        assertEquals(HostingPolicy.Reject.FAILED, (fetcher().fetch(uri(short, "/a.png").toString(), dir, 1000, 5000) as HostFetcher.Rejected).reason)
+    }
+
+    @Test
+    fun fetchReportsTheContentHash(@TempDir dir: Path) {
+        val body = "content".toByteArray(StandardCharsets.US_ASCII)
+        val s = serve { sock, _ -> write(sock, "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: ${body.size}\r\n\r\n", body) }
+        val r = fetcher().fetch(uri(s, "/a.png").toString(), dir, 1000, 5000) as HostFetcher.Fetched
+        assertEquals(java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(body)), r.sha256)
+    }
+
+    @Test
+    fun hostRulesApplyToEveryRedirectHop(@TempDir dir: Path) {
+        lateinit var s: SafeHttpTest.RawServer
+        s = serve { sock, req ->
+            when {
+                req.startsWith("GET /away") -> write(sock, "HTTP/1.1 302 Found\r\nLocation: http://other.example:${s.port}/a.png\r\nContent-Length: 0\r\n\r\n")
+                req.startsWith("GET /near") -> write(sock, "HTTP/1.1 302 Found\r\nLocation: http://cdn.site.example:${s.port}/a.png\r\nContent-Length: 0\r\n\r\n")
+                else -> write(sock, "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 3\r\n\r\n", byteArrayOf(1, 2, 3))
+            }
+        }
+        val o = SafeHttp.Options()
+        o.allowNonPublicForTests = true
+        o.connectTimeoutMillis = 2000
+        val lo = arrayOf(InetAddress.getLoopbackAddress())
+        o.resolver = SafeHttp.fixedResolver(mapOf("site.example" to lo, "cdn.site.example" to lo, "other.example" to lo))
+        val link = LinkSettings()
+        link.hostMinIntervalSeconds = 0
+        val cfg = HostingSettings()
+        cfg.allowHostsSet = true
+        cfg.allowHosts = listOf("site.example")
+        val f = HostFetcher(SafeHttp(o), { URI.create(it) }, HostThrottle(link), 5, MediaKind.defaultExtensions(), cfg::hostPermitted)
+        assertTrue(f.fetch("http://site.example:${s.port}/near", dir, 1000, 5000) is HostFetcher.Fetched, "サブドメインへの転送はよい")
+        assertEquals(HostingPolicy.Reject.UNSAFE, (f.fetch("http://site.example:${s.port}/away", dir, 1000, 5000) as HostFetcher.Rejected).reason, "ほかのホストへの転送は読まない")
+        assertEquals(0, s.requests.count { it.contains("other.example") })
+        assertEquals(HostingPolicy.Reject.UNSAFE, (f.fetch("http://other.example:${s.port}/a.png", dir, 1000, 5000) as HostFetcher.Rejected).reason)
+    }
+
+    @Test
     fun idIsTwelveBase32Characters() {
         val a = HostFetcher.idOf(ByteArray(32) { 0 })
         val b = HostFetcher.idOf(ByteArray(32) { 0xFF.toByte() })

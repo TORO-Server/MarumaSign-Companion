@@ -10,7 +10,7 @@ libraries:
 commands:
   marumasign:
     description: Status, rescan, reload, broken link and hosting tools for MarumaSign signs
-    usage: /marumasign [status|rescan|reload|broken [page]|linkstatus|recheck <URL|all-broken>|hosting [status|list [page]|remove <id>]]
+    usage: /marumasign [status|rescan|reload|broken [page]|linkstatus|recheck <URL|all-broken>|hosting [status|list [page]|remove <id>|pending [page]|approve <key>|reject <key>]]
     permission: marumasign.admin
     aliases: [marumasignmap]
 permissions:

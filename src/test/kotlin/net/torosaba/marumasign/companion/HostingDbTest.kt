@@ -485,10 +485,192 @@ class HostingDbTest {
     @Test
     fun schemaIsTheAgreedContract() {
         val ddl = DbHostingStorage.schema("msc_")
-        assertEquals(6, ddl.size)
+        assertEquals(9, ddl.size)
         assertTrue(ddl[0].contains("msc_hosted_file (id CHAR(12) PRIMARY KEY"))
         assertTrue(ddl[1].contains("data MEDIUMBLOB NOT NULL, PRIMARY KEY (id, seq)"))
         assertTrue(ddl[5].contains("msc_client (ip_hash BINARY(32) PRIMARY KEY, last_seen BIGINT NOT NULL, online TINYINT NOT NULL)"))
         assertEquals(1048576, DbHostingStorage.CHUNK_SIZE)
+        // 足すのは新しい表だけ。以前からある表を変える文はない
+        assertTrue(ddl.all { it.startsWith("CREATE TABLE IF NOT EXISTS ") })
+        assertEquals(listOf("msc_hosted_owner", "msc_sign_author", "msc_hosted_audit"),
+            ddl.drop(6).map { it.removePrefix("CREATE TABLE IF NOT EXISTS ").substringBefore(' ') })
+    }
+
+    // ---- 作者の記録と、以前からあるデータ ----
+
+    /** 以前の版の表と行を作る (新しい表はない) */
+    private fun legacyDatabase(name: String, dir: Path): HostedStore.HostedFile {
+        val old = Db("jdbc:h2:mem:$name;MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "", logger,
+            init = { db, c -> for (sql in DbHostingStorage.schema(prefix).take(6)) db.update(c, sql) })
+        val bytes = random(mib + 100, 21)
+        val (f, _) = content(dir, bytes)
+        old.use { c ->
+            old.update(c, "INSERT INTO ${prefix}hosted_chunk (id, seq, data) VALUES (?, ?, ?)", f.id, 0, bytes.copyOf(mib))
+            old.update(c, "INSERT INTO ${prefix}hosted_chunk (id, seq, data) VALUES (?, ?, ?)", f.id, 1, bytes.copyOfRange(mib, bytes.size))
+            old.update(c, "INSERT INTO ${prefix}hosted_file (id, ext, content_type, size, chunk_size, chunks, sha256, hosted_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                f.id, f.ext, "image/png", bytes.size.toLong(), mib, 2, hex(MessageDigest.getInstance("SHA-256").digest(bytes)), 100L, 200L)
+            old.update(c, "INSERT INTO ${prefix}hosted_source (url_hash, url, file_id) VALUES (?, ?, ?)",
+                DbHostingStorage.urlHash("https://a.example/a.png"), "https://a.example/a.png", f.id)
+            old.update(c, "INSERT INTO ${prefix}sign_origin (sign_key, file_id, original_url) VALUES (?, ?, ?)", "world:1:2:3", f.id, "https://a.example/a.png")
+            old.update(c, "INSERT INTO ${prefix}state (name, json) VALUES (?, ?)", "denied", "[\"https://e.example/e.png\"]")
+        }
+        old.close()
+        return f
+    }
+
+    /** 表の中身 (行ごとの文字) を比べられる形で */
+    private fun snapshot(db: Db, table: String): List<String> = db.use { c ->
+        db.query(c, "SELECT * FROM $prefix$table") { rs ->
+            val out = ArrayList<String>()
+            val n = rs.metaData.columnCount
+            while (rs.next()) {
+                out.add((1..n).joinToString("|") { i ->
+                    when (val v = rs.getObject(i)) {
+                        is ByteArray -> hex(v)
+                        is java.sql.Blob -> hex(v.getBytes(1, v.length().toInt()))
+                        is java.sql.Clob -> v.getSubString(1, v.length().toInt())
+                        else -> v.toString()
+                    }
+                })
+            }
+            out.sorted()
+        }
+    }
+
+    @Test
+    fun rowsFromEarlierVersionsSurviveAndAreUnattributed(@TempDir dir: Path) {
+        val name = UUID.randomUUID().toString()
+        val f = legacyDatabase(name, dir)
+        val db = db(name)
+        val before = listOf("hosted_file", "hosted_chunk", "hosted_source", "sign_origin").associateWith { t ->
+            Db("jdbc:h2:mem:$name;MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "", logger).let { d -> snapshot(d, t).also { d.close() } }
+        }
+
+        val s = storage(db)
+        val store = HostedStore()
+        s.load(store)
+        val loaded = store.files[f.id]!!
+        assertNull(loaded.owner, "作者の記録がないファイルは、作者が分からないファイル")
+        assertEquals(hex(MessageDigest.getInstance("SHA-256").digest(random(mib + 100, 21))), loaded.sha256)
+        assertEquals(f.id, store.bySource["https://a.example/a.png"])
+        assertEquals("https://a.example/a.png", loaded.origins["world:1:2:3"])
+        assertTrue("https://e.example/e.png" in store.denied)
+
+        // だれの上限にも数えない
+        val quota = HostingQuota(1, 1, store.files.values)
+        assertEquals(0, quota.filesOf("00000000-0000-0000-0000-000000000001"))
+
+        // 保存しても、以前の表の行は変わらない
+        store.dirty = true
+        s.save(store)
+        for ((t, rows) in before) assertEquals(rows, snapshot(db, t), t)
+        assertEquals(0, count(db, "hosted_owner"))
+        assertEquals(0, count(db, "sign_author"))
+        assertEquals(0, count(db, "hosted_audit"))
+    }
+
+    @Test
+    fun ownersAuthorsAndApprovalsRoundTripAndOnlyChangesAreWritten(@TempDir dir: Path) {
+        val name = UUID.randomUUID().toString()
+        val db = db(name)
+        val s = storage(db)
+        val store = HostedStore()
+        s.load(store)
+        val a = "00000000-0000-0000-0000-00000000000a"
+        val (f, tmp) = content(dir, random(5000, 31))
+        f.owner = a
+        f.sources.add("https://a.example/a.png")
+        s.put(f, tmp)
+        store.add(f)
+        store.authors["world:1:2:3"] = HostedStore.SignAuthor(a, "https://a.example/a.png", 77)
+        store.approved.add("https://b.example/b.png")
+        s.save(store)
+
+        // 何も変わっていなければ、何も書かない
+        val log = ArrayList<String>()
+        db.trace = { log.add(it) }
+        s.save(store)
+        assertEquals(listOf<String>(), log)
+        db.trace = null
+
+        val again = HostedStore()
+        val s2 = storage(db(name))
+        s2.load(again)
+        assertEquals(a, again.files[f.id]!!.owner)
+        assertEquals(hex(MessageDigest.getInstance("SHA-256").digest(random(5000, 31))), again.files[f.id]!!.sha256)
+        assertEquals(HostedStore.SignAuthor(a, "https://a.example/a.png", 77), again.authors["world:1:2:3"])
+        assertTrue("https://b.example/b.png" in again.approved)
+
+        // 記録が消えたら、行も消える。ファイルを消せば、持ち主の行も消える
+        again.authors.remove("world:1:2:3")
+        again.remove(f.id)
+        s2.save(again)
+        assertEquals(0, count(db, "sign_author"))
+        assertEquals(0, count(db, "hosted_owner"))
+        assertEquals(0, count(db, "hosted_file"))
+    }
+
+    @Test
+    fun brokenOwnerAndAuthorRowsAreSkipped(@TempDir dir: Path) {
+        val name = UUID.randomUUID().toString()
+        val db = db(name)
+        val s = storage(db)
+        s.load(HostedStore())
+        val (f, tmp) = content(dir, random(10, 41))
+        s.put(f, tmp)
+        db.use { c ->
+            db.update(c, "INSERT INTO ${prefix}hosted_owner (file_id, player_uuid) VALUES (?, ?)", f.id, "not-a-uuid")
+            db.update(c, "INSERT INTO ${prefix}sign_author (sign_key, player_uuid, url, written_at) VALUES (?, ?, ?, ?)", "world:1:2:3", "not-a-uuid", "https://a.example/a.png", 1L)
+            db.update(c, "INSERT INTO ${prefix}sign_author (sign_key, player_uuid, url, written_at) VALUES (?, ?, ?, ?)", "bad key", "00000000-0000-0000-0000-00000000000a", "https://a.example/a.png", 1L)
+        }
+        val loaded = HostedStore()
+        storage(db(name)).load(loaded)
+        assertNull(loaded.files[f.id]!!.owner)
+        assertTrue(loaded.authors.isEmpty())
+    }
+
+    @Test
+    fun auditRowsAreOnlyAppended(@TempDir dir: Path) {
+        val db = db()
+        val s = storage(db)
+        s.load(HostedStore())
+        val sha = "0".repeat(64)
+        s.audit(listOf(AuditEntry(5, AuditEntry.HOSTED, "aaaaaaaaaaaa", sha, 9, "https://a.example/a.png", "world:1:2:3", "00000000-0000-0000-0000-00000000000a")))
+        s.audit(listOf(AuditEntry(6, AuditEntry.REMOVED, "aaaaaaaaaaaa", sha, 9, "https://a.example/a.png", null, null)))
+        val rows = db.use { c ->
+            db.query(c, "SELECT event_at, kind, file_id, sha256, size, url, sign_key, player_uuid FROM ${prefix}hosted_audit ORDER BY seq") { rs ->
+                val out = ArrayList<List<Any?>>()
+                while (rs.next()) out.add((1..8).map { rs.getObject(it)?.toString() })
+                out
+            }
+        }
+        assertEquals(listOf<List<Any?>>(
+            listOf("5", "hosted", "aaaaaaaaaaaa", sha, "9", "https://a.example/a.png", "world:1:2:3", "00000000-0000-0000-0000-00000000000a"),
+            listOf("6", "removed", "aaaaaaaaaaaa", sha, "9", "https://a.example/a.png", null, null),
+        ), rows)
+    }
+
+    @Test
+    fun ownersAuthorsAndApprovalsAreImportedFromFilesStorage(@TempDir dir: Path) {
+        val hosted = Files.createDirectories(dir.resolve("hosted"))
+        val a = "00000000-0000-0000-0000-00000000000a"
+        val f = placed(hosted, random(300, 51), "png")
+        f.owner = a
+        f.sources.add("https://a.example/a.png")
+        val old = HostedStore()
+        old.add(f)
+        old.authors["world:1:2:3"] = HostedStore.SignAuthor(a, "https://a.example/a.png", 77)
+        old.approved.add("https://b.example/b.png")
+        val json = dir.resolve("hosting.json")
+        old.save(json)
+
+        val db = db()
+        val store = HostedStore()
+        storage(db, json, hosted).load(store)
+        assertEquals(a, store.files[f.id]!!.owner)
+        assertEquals(a, store.authors["world:1:2:3"]!!.uuid)
+        assertTrue("https://b.example/b.png" in store.approved)
+        assertEquals(1, count(db, "hosted_owner"))
+        assertEquals(1, count(db, "sign_author"))
     }
 }

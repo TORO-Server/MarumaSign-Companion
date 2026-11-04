@@ -2,6 +2,7 @@ package net.torosaba.marumasign.companion
 
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer
+import org.bukkit.Bukkit
 import org.bukkit.Tag
 import org.bukkit.block.Block
 import org.bukkit.block.BlockFace
@@ -13,6 +14,7 @@ import org.bukkit.event.EventPriority
 import org.bukkit.event.Listener
 import org.bukkit.event.block.BlockBreakEvent
 import org.bukkit.event.block.BlockExplodeEvent
+import org.bukkit.event.block.BlockPlaceEvent
 import org.bukkit.event.block.SignChangeEvent
 import org.bukkit.event.entity.EntityExplodeEvent
 import org.bukkit.event.world.WorldLoadEvent
@@ -28,7 +30,23 @@ internal class SignListener(private val plugin: MarumaSignCompanion) : Listener 
         val side = event.side
         val front = if (side == Side.FRONT) join(event.lines()) else join(sign.getSide(Side.FRONT).lines())
         val back = if (side == Side.BACK) join(event.lines()) else join(sign.getSide(Side.BACK).lines())
-        plugin.signChanged(block.world, block.x, block.y, block.z, front + back, orientOf(block))
+        plugin.signChanged(block.world, block.x, block.y, block.z, front + back, orientOf(block), event.player.uniqueId)
+    }
+
+    /**
+     * 文字の入った看板のアイテムを置いたとき (SignChangeEvent が来ない)。置いた人を作者にする。
+     * ブロックの中身が入ってから読むので、次の tick に。ふつうの空の看板は何もしない (書いたときに onSignChange が来る)
+     */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    fun onPlace(event: BlockPlaceEvent) {
+        val block = event.blockPlaced
+        if (!Tag.ALL_SIGNS.isTagged(block.type) || !plugin.tracks(block.world)) return
+        val player = event.player.uniqueId
+        Bukkit.getScheduler().runTask(plugin, Runnable {
+            val sign = block.getState(false) as? Sign ?: return@Runnable
+            val text = join(sign.getSide(Side.FRONT).lines()) + join(sign.getSide(Side.BACK).lines())
+            if (MarumaSpec.parse(text) != null) plugin.signChanged(block.world, block.x, block.y, block.z, text, orientOf(block), player)
+        })
     }
 
     @EventHandler(priority = EventPriority.MONITOR)

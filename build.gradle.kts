@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "net.torosaba"
-version = "2.3.0"
+version = "2.4.0"
 
 repositories {
     // Maven Central 以外からは、そのリポジトリにしかないグループだけを取る (同じ名前の別物を、別のリポジトリから取らない)

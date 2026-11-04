@@ -94,6 +94,8 @@ internal class SafeHttp(private val o: Options) {
         val encoded: Boolean = false,
         /** 本文を書き出したとき: 上限を超えた、または途中で切れた (書き出したものは使えない) */
         val truncated: Boolean = false,
+        /** truncated のうち、上限を超えたもの */
+        val overLimit: Boolean = false,
     )
 
     /**
@@ -461,7 +463,7 @@ internal class SafeHttp(private val o: Options) {
                     } ?: false
                     if (!chunked && contentLength != null && length < 0) throw HttpFailure(Kind.BAD_RESPONSE)
                     val copied = r.copy(download.sink, download.maxBytes, chunked, if (chunked) -1 else length)
-                    return head.copy(bodyBytes = maxOf(copied, 0), truncated = copied < 0)
+                    return head.copy(bodyBytes = maxOf(copied, 0), truncated = copied < 0, overLimit = copied == OVER_LIMIT)
                 }
                 val body = if (readBody && status != 204 && status != 304) r.discard(o.maxBodyBytes) else 0L
                 return head.copy(bodyBytes = body)
@@ -507,16 +509,16 @@ internal class SafeHttp(private val o: Options) {
 
         /**
          * 本文を sink に書き出す (圧縮されていても展開しない)。書き出したバイト数。
-         * max を超えた、Content-Length より短い、chunked の形が壊れているときは -1 (書き出した分は使えない)
+         * max を超えたら [OVER_LIMIT]。Content-Length より短い、chunked の形が壊れているときは -1 (どちらも、書き出した分は使えない)
          */
         @Throws(IOException::class)
         fun copy(sink: OutputStream, max: Long, chunked: Boolean, length: Long): Long {
             if (!chunked) {
-                if (length > max) return -1
+                if (length > max) return OVER_LIMIT
                 val limit = if (length >= 0) length else max + 1
                 val n = copyRaw(sink, limit)
                 if (length >= 0) return if (n == length) n else -1
-                return if (n > max) -1 else n
+                return if (n > max) OVER_LIMIT else n
             }
             var total = 0L
             while (true) {
@@ -525,7 +527,7 @@ internal class SafeHttp(private val o: Options) {
                 if (size.isEmpty() || size.length > 15 || !size.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) return -1
                 val n = size.toLong(16)
                 if (n == 0L) break
-                if (total + n > max) return -1
+                if (total + n > max) return OVER_LIMIT
                 if (copyRaw(sink, n) != n) return -1
                 total += n
                 if (readLine(2).isNotEmpty()) return -1
@@ -577,6 +579,7 @@ internal class SafeHttp(private val o: Options) {
         private val STATUS: Pattern = Pattern.compile("^HTTP/1\\.[01] (\\d{3})(?: .*)?\$")
         private val HEADER_NAME: Pattern = Pattern.compile("^[!#\$%&'*+.^_`|~0-9A-Za-z-]+\$")
         private const val MAX_ADDRESSES = 4
+        private const val OVER_LIMIT = -2L
 
         @Throws(IOException::class)
         private fun plainConnect(address: InetAddress, port: Int, timeoutMillis: Int): Socket {

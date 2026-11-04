@@ -153,6 +153,7 @@ URL ごとに 1 回 (同じ URL の看板が複数あっても 1 回)。状態�
    | 管理者が取り下げた URL・`exclude-hosts` のホスト | |
 
    ホストできなかった URL は、一時的な理由 (接続の失敗・期限切れ・正常でない応答) なら 1 日後、それ以外は 7 日後にもう一度だけ試します。
+   全体やプレイヤーの分の空きが足りなかっただけの URL は、失敗にせず、30 分後にもう一度試します。
 4. ファイル名は内容の SHA-256 から作る 12 文字 (`<id>.<拡張子>`)。同じ内容は 1 つのファイルにまとめます。
 5. ホストしたら、その URL の看板の文字を `<public-base-url>/<id>.<拡張子>` に書き換えます。
    - URL より後ろ (位置・大きさ・回転、余分な文字) はそのまま残します。MarumaSign 本体が書くときと同じく表の 4 行に均等に分け、裏は空にします (入りきらなければ裏も使う)。
@@ -162,6 +163,49 @@ URL ごとに 1 回 (同じ URL の看板が複数あっても 1 回)。状態�
 6. どの看板にも使われなくなってから `unhost-after-days` (既定 14 日) たったファイルは、ホストをやめて消します。
 7. `/marumasign hosting remove <id>` で取り下げると、ファイルを消し、元の URL はもうホストせず、書き換えた看板は元の URL に戻します (権利者からの申し立てなどのため)。
 
+読み込みは専用のスレッドで行います (同時に `download-concurrency` まで、既定 2)。遅い応答を待つあいだも、看板の書き換えと状態の保存は止まりません。
+
+### 作者と上限
+
+看板を書いたプレイヤー (`SignChangeEvent` の人。文字の入った看板のアイテムを置いたときは、置いた人) を記録します。
+ホストするファイルは、その看板の作者 1 人の分として数えます。
+
+| 上限 | 設定 | 既定 | 上限に達したら |
+| --- | --- | --- | --- |
+| プレイヤーごとのファイルの数 | `hosting.quota.per-player-files` | 100 (0 で上限なし) | その人の URL は読みにも行かず、空くまで候補のまま待つ |
+| プレイヤーごとの容量 | `hosting.quota.per-player-mb` | 256 MB (0 で上限なし) | 同上。残りより大きいファイルは、30 分後にもう一度試す |
+| 全体のファイルの数 | `hosting.max-total-files` | 20000 | 新しくホストしない |
+| 全体の容量 | `hosting.max-total-mb` | 4096 MB | 新しくホストしない。残りより大きいファイルは、30 分後にもう一度試す |
+| 全体の 1 時間あたりの読み込み | `hosting.per-hour-limit` | 30 | 次の時間まで待つ。1 人のプレイヤーの分は、この 3 分の 1 まで |
+| 同時の読み込み | `hosting.download-concurrency` | 2 | 1 人のプレイヤーの分は同時に 1 件まで |
+
+- 上限で待っているあいだも、看板は元の URL のまま見えます。
+- **作者が分からない看板** (記録を始める前からある看板、WorldEdit などプレイヤーの書き込みによらない看板) は、これまでどおりホストし、ファイルはだれの分にも数えません (全体の上限には数えます)。
+  同じ URL の看板が複数あれば、作者が分からない看板が 1 枚でもあるときは、だれの分にも数えません。全員分かっていれば、先に書いた人から順に、上限に余りがある人の分として数えます。
+- 同じ内容のファイルは、最初の人の分のままです。ファイルが消えると (`remove`、`unhost-after-days`)、その分は空きます。
+
+### ホストするものを絞る (どちらも既定は無効)
+
+- `hosting.allow-hosts`: 書いておくと、そのホスト (と下のサブドメイン) の URL だけホストします。転送の先にも当てます。空なら制限しません。読める行がひとつもないときは、新しくホストしません。
+- `hosting.require-approval: true`: 管理者が承認した URL だけ読み込みます。`/marumasign hosting pending [ページ]` で一覧を出し (短いキー・URL・作者)、`approve <キー>` か `reject <キー>` で答えます。断った URL はホストしません (看板はそのまま)。
+
+どちらも、ホスト済みのファイルと、それを指す看板には影響しません。
+
+### 監査ログ
+
+ホストした内容を残します。行を足すだけで、書き換えません。storage: database では表 `msc_hosted_audit`、storage: files では `hosting-audit.jsonl` (1 行に 1 つの JSON) です。
+URL はクエリも含めてそのまま入るので、管理者だけが読めるところに置いてください。
+
+| `kind` | いつ | 看板 (`sign_key`) と作者 (`player_uuid`) |
+| --- | --- | --- |
+| `hosted` | 新しいファイルをホストした | 数える人の看板と、その人 (作者が分からないときは、最初の看板と NULL) |
+| `same-content` | ホストしているファイルと同じ内容の URL を、そのファイルにまとめた | 同上 |
+| `sign-rewritten` | 看板をホスト先に書き換えた | 書き換えた看板と、その作者 |
+| `unhosted` | どの看板にも使われなくなって、ホストをやめた | 看板は NULL、持ち主 |
+| `removed` | 管理者が取り下げた | 看板は NULL、持ち主 |
+
+どの行にも、時刻、ファイルの id、内容の SHA-256 (以前の `hosting.json` のファイルは空のことがある)、大きさ、URL があります。
+
 ### 保存先 (`hosting.storage`)
 
 | 値 | ファイルの中身 | 状態 (候補・失敗・書き換え待ち・取り下げ・元の URL) | 配るもの |
@@ -169,9 +213,17 @@ URL ごとに 1 回 (同じ URL の看板が複数あっても 1 回)。状態�
 | `files` (既定) | `hosting.directory` (空ならプラグインのフォルダの `hosted`) に `<id>.<拡張子>` | `hosting.json` | 内蔵の Web サーバーか、外の Web サーバー (下の「配り方」) |
 | `database` | データベース (TiDB / MySQL) の行に 1 MiB ずつ | データベースの行 | データベースを直接読む別の assets サーバー (このプラグインの内蔵の Web サーバーは使わない) |
 
-`database` の設定は `hosting.database` (`url` `user` `password` `table-prefix`。既定は `jdbc:mysql://tidb:4000/marumasign`、`root`、空のパスワード、`msc_`)。
+`database` の設定は `hosting.database` (`url` `user` `password` `table-prefix`。`url` の既定は `jdbc:mysql://tidb:4000/marumasign`、`table-prefix` の既定は `msc_`)。
 
-- URL のデータベースがなければ、データベースを付けずにつないで `CREATE DATABASE IF NOT EXISTS` で作り、表がなければ作ります。
+- **`user` と `password` に既定はありません。** どちらかが空 (行がないときも) なら、エラーをログに出してホストを始めません。ほかの機能は動きますが、新しいホストと看板の書き換えは止まり、接続しているクライアントの記録 (下) も書かないので、assets サーバーはプレイヤーに配れなくなります。
+- `root` を指定すると動きますが、警告を出します。このプラグイン専用のユーザーを作ってください (接続のたびに `CREATE TABLE IF NOT EXISTS` を実行するので `CREATE` も要ります):
+
+  ```sql
+  CREATE USER '<ユーザー>'@'%' IDENTIFIED BY '<パスワード>';
+  GRANT SELECT, INSERT, UPDATE, DELETE, CREATE ON marumasign.* TO '<ユーザー>'@'%';
+  ```
+
+- URL のデータベースがなければ、データベースを付けずにつないで `CREATE DATABASE IF NOT EXISTS` で作り、表がなければ作ります (データベースを作るには、そのための権限が要ります。専用のユーザーなら、データベースは先に作っておきます)。
 - JDBC のドライバー (MySQL Connector/J) は JAR に入れず、`plugin.yml` の `libraries` で Paper に読み込ませます (初回の起動で Maven Central から取ってきます)。ORM は使わず、JDBC だけです。
 - データベースの読み書きは、メインスレッドでは行いません (ホストのスレッドと、クライアントの記録のスレッド。接続はそれぞれ 1 本で、切れたらつなぎ直します)。
   データベースにつながらないあいだは、ホストの処理を止めて、1 分ごとに読み込みをやり直します (空の状態で上書きしないため)。
@@ -186,8 +238,13 @@ URL ごとに 1 回 (同じ URL の看板が複数あっても 1 回)。状態�
 | `msc_hosted_chunk` | `id`、`seq`、`data` MEDIUMBLOB (主キー `id, seq`) | 中身。1 行 1 MiB (1048576 バイト) で、最後の行だけ短い |
 | `msc_hosted_source` | `url_hash` BINARY(32) 主キー、`url`、`file_id` | 元の URL (`url_hash` は URL の UTF-8 の SHA-256) |
 | `msc_sign_origin` | `sign_key` 主キー (`world:x:y:z`)、`file_id`、`original_url` | 書き換えた看板と、書き換える前の URL |
-| `msc_state` | `name` 主キー、`json` | `candidates` `failures` `rewrites` `denied` の 4 行 (`hosting.json` と同じ形。読むときも同じ確認) |
+| `msc_state` | `name` 主キー、`json` | `candidates` `failures` `rewrites` `denied` `approved` の行 (`hosting.json` と同じ形。読むときも同じ確認) |
 | `msc_client` | `ip_hash` BINARY(32) 主キー、`last_seen`、`online` | いま遊んでいる (か、さっきまで遊んでいた) プレイヤーの IP の HMAC (下) |
+| `msc_hosted_owner` | `file_id` 主キー、`player_uuid` | ファイルをだれの分として数えるか。行がないファイルは、作者が分からないファイル |
+| `msc_sign_author` | `sign_key` 主キー (`world:x:y:z`)、`player_uuid`、`url`、`written_at` | 看板を書いたプレイヤーと、書いた URL。看板が別の URL に変わったら消す |
+| `msc_hosted_audit` | `seq` 主キー、`event_at`、`kind`、`file_id`、`sha256`、`size`、`url`、`sign_key`、`player_uuid` | 監査ログ (上)。足すだけ |
+
+あとの 3 つの表は、assets サーバーは読みません。以前の版のデータベースにも、最初の接続で表が足されるだけで、これまでの表と行は変わりません。
 
 - 新しいファイルは、中身の行をすべて書いてから `msc_hosted_file` の行を書きます。assets サーバーは `msc_hosted_file` の行があるファイルだけを配り、`chunks` と `size` を信じてよい
   (中身がそろっていない `msc_hosted_file` の行は作りません)。TiDB は 1 つの書き込みが 6 MB を超えると断るので、中身は 1 行ずつ別の文で書きます。
@@ -222,9 +279,10 @@ assets サーバー (`https://assets.torosaba.net/<id>.<拡張子>`) は、Marum
 
 管理コマンド (権限 `marumasign.admin`):
 
-- `/marumasign hosting [status]` 件数・容量・候補・書き換え待ちの看板の数、保存先 (`files` / `database`) とデータベースの接続の状態、クライアントの記録の状態。
-- `/marumasign hosting list [ページ]` ホストしているファイルと元の URL。
+- `/marumasign hosting [status]` 件数・容量・候補・書き換え待ちの看板の数、上限と読み込みの状況、保存先 (`files` / `database`) とデータベースの接続の状態、クライアントの記録の状態。
+- `/marumasign hosting list [ページ]` ホストしているファイルと元の URL、作者。
 - `/marumasign hosting remove <id>` 取り下げ (上の 7)。
+- `/marumasign hosting pending [ページ]`、`approve <キー>`、`reject <キー>` 承認 (`require-approval` のとき。上の「ホストするものを絞る」)。
 
 注意:
 
@@ -248,6 +306,8 @@ assets サーバー (`https://assets.torosaba.net/<id>.<拡張子>`) は、Marum
 | 数値の細工 (`NaN` `Infinity`) | 読み込み時に除く。キャッシュから読んだ値も、有限で ±1000 の範囲に収める |
 | 短縮 URL の解決を悪用した、サーバーからの内部へのアクセス (SSRF) | つなぐのは設定した短縮サービスのホスト (既定 `is.gd` `v.gd` `x.gd`) の `https` 443 番だけ。`HEAD` で `Location` を読むだけで、転送を自動で追わず、行き先にはつながない。行き先は URL の確認と DNS の確認を通ったものだけ使う。3 回まで・300 ms 間隔。保存したキャッシュも使う前にもう一度確認する |
 | 無関係なファイルへの書き込み | 書くのは `plugins/MarumaSignCompanion/` の中と、BlueMap の `webroot` の `js/marumasign3d.js` と `marumasign/<地図の id>.json` だけ (id は英数字などに限る)。ワールドのデータは読み取り専用 |
+| サーバーに置く量・内容 (`hosting`) | プレイヤーごと・全体の上限、ホストの許可リストと承認制 (任意)、作者と内容の監査ログ (上の「ホスト」) |
+| サーバー自身の公開アドレスへの接続 | `link-check.extra-blocked-addresses` が空なら、起動のログで警告する。サーバーの公開 IP と WAN 側の範囲を書く |
 | プレイヤーの IP の保存 (`hosting.client-check`) | IP はそのまま保存せず、assets サーバーと共有する秘密の文字列での HMAC-SHA256 だけを `msc_client` に書く。1 日で消す。IP はログ・コマンドに出さない。`secret` が空なら何も書かない |
 | 1 つのブラウザーの負荷 | 距離 (既定 192 ブロック)・数 (既定 200)・テクスチャの量・同時に読む数に上限 |
 | 多すぎるマーカー | `max-markers` (Dynmap / markers モード)、`web3d.max-signs` |
@@ -263,10 +323,11 @@ CSP の `connect-src https:` は 3D 表示が画像を読むために、`'unsafe
 ## ビルドとテスト
 
 Kotlin で書いています。JDK 25 以上が必要です (Paper 26.3 の API が Java 25 以上のため)。Gradle の Java ツールチェーンで 25 を使います。Kotlin の標準ライブラリは JAR に入れて、パッケージを移しています (ほかの Kotlin 製プラグインと衝突しない)。
+Gradle は Wrapper で 9.3.0 に固定しています (`gradle-wrapper.properties` の `distributionSha256Sum` で、取ってきた配布物を確かめます)。Windows では `gradlew.bat` です。
 
 ```
-gradle test      # 単体テスト
-gradle shadowJar # build/libs/MarumaSignCompanion-<版>.jar (Kotlin の標準ライブラリ入り。-thin.jar は入っていないので使わない)
+./gradlew test      # 単体テスト
+./gradlew shadowJar # build/libs/MarumaSignCompanion-<版>.jar (Kotlin の標準ライブラリ入り。-thin.jar は入っていないので使わない)
 node src/test/js/marumasign3d.test.js   # 3D 表示のスクリプトのテスト (Node 18 以上)
 ```
 
@@ -275,21 +336,23 @@ node src/test/js/marumasign3d.test.js   # 3D 表示のスクリプトのテス�
 - `CoreTest`: 看板の判定、URL の確認、HTML のエスケープ、NBT の読み取り、キャッシュ。
 - `HostingTest` / `DownloadTest`: 看板の URL の差し替えと行の分け方、ホストしないものの判定、配るときの `Range`、`hosting.json` の検証、本文の書き出し (chunked・上限・途中で切れたもの・食い違う長さ)、転送と内容からの名前。
 - `HostingDbTest`: `storage: database` (H2 の MySQL 互換モードで代用)。1 MiB ごとの分け方、中身 → `msc_hosted_file` の書く順と、消す順、途中で失敗したときに行を残さないこと、
-  変わったところだけ書くこと、壊れた行の扱い、`files` からの取り込み (2 回目は二重にしない)、IP の HMAC (IPv4 射影の扱い。別の実装で計算した値と突き合わせ)、`msc_client` の更新。
+  変わったところだけ書くこと、壊れた行の扱い、`files` からの取り込み (2 回目は二重にしない)、IP の HMAC (IPv4 射影の扱い。別の実装で計算した値と突き合わせ)、`msc_client` の更新、以前の版の行がそのまま残ること。
+- `HostingHardeningTest`: 遅い応答が保存と書き換えを止めないこと、同時の読み込みの上限、プレイヤーごと・全体の上限、作者の記録、空きが足りないときのやり直し、許可リスト、承認、監査ログ、以前の `hosting.json` の読み込み。
+- `CoalescerTest`: Dynmap の更新を 1 回にまとめること。
 - `marumasign3d.test.js`: URL・データの検証、大きさの上限、**MarumaSign 本体の `SignImage` が出した 300 通りの頂点 (`src/test/js/reference-mesh.json`) との一致 (差は 1e-6 以下)**。
 
 実際のワールドの region ファイルで試すには、いくつかの `.mca` をフォルダに入れて次のようにします (中身を出力します)。
 
 ```
-gradle test -Dmarumasign.sampleRegions=<region ファイルのフォルダ>
+./gradlew test -Dmarumasign.sampleRegions=<region ファイルのフォルダ>
 ```
 
 ## デプロイ (Docker の Paper サーバー)
 
-1. `gradle shadowJar` で JAR を作り、サーバーの `plugins/` に置きます。旧名の `BlueMapMarumaSign-*.jar` があれば取り除きます (`plugin_jars_old_*` に退避。両方入れると二重に動きます)。
+1. `./gradlew shadowJar` で JAR を作り、サーバーの `plugins/` に置きます。旧名の `BlueMapMarumaSign-*.jar` があれば取り除きます (`plugin_jars_old_*` に退避。両方入れると二重に動きます)。
 2. 地図に出すなら、BlueMap 5.x (`bluemap-*-paper.jar`) か Dynmap (または両方) を `plugins/` に入れて、地図を設定します (なくても、ほかの機能は動きます)。
 3. ホストを使うなら、`config.yml` の `hosting` を設定し、`public-base-url` から内蔵の Web サーバー (既定 8110 番) に届くよう、逆プロキシを用意します。
-   `storage: database` なら、`hosting.database` をデータベース (本番は `jdbc:mysql://tidb:4000/marumasign`) にし、`public-base-url` を assets サーバーのアドレスにして、
+   `storage: database` なら、`hosting.database` をデータベース (本番は `jdbc:mysql://tidb:4000/marumasign`) と専用のユーザー・パスワードにし、`public-base-url` を assets サーバーのアドレスにして、
    `client-check.secret` を assets サーバーと同じ文字列にします (Paper が初回の起動で MySQL Connector/J を Maven Central から取ってきます)。
 4. サーバーを再起動します (ログイン中のプレイヤーがいないことを確認してから)。
 5. ログに `[<ワールド名>] Scan finished: ...` (BlueMap があれば `3D sign script installed in the BlueMap web root`、ホストが有効なら `Hosting is on: ...`) が出ます。
