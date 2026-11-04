@@ -8,10 +8,31 @@ group = "net.torosaba"
 version = "2.3.0"
 
 repositories {
-    mavenCentral()
-    maven("https://repo.papermc.io/repository/maven-public/")
-    maven("https://repo.bluecolored.de/releases")
-    maven("https://repo.mikeprimm.com/")
+    // Maven Central 以外からは、そのリポジトリにしかないグループだけを取る (同じ名前の別物を、別のリポジトリから取らない)
+    mavenCentral {
+        content {
+            excludeGroup("io.papermc.paper")
+            excludeGroup("de.bluecolored")
+            excludeGroup("us.dynmap")
+        }
+    }
+    maven("https://repo.papermc.io/repository/maven-public/") {
+        content {
+            includeGroup("io.papermc.paper")
+            includeGroup("com.mojang")
+            includeGroup("net.md-5")
+        }
+    }
+    maven("https://repo.bluecolored.de/releases") {
+        content {
+            includeGroup("de.bluecolored")
+        }
+    }
+    maven("https://repo.mikeprimm.com/") {
+        content {
+            includeGroup("us.dynmap")
+        }
+    }
 }
 
 kotlin {
