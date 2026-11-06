@@ -21,6 +21,8 @@ import java.util.logging.Logger
  *   chunks と size を信じるので、中身がそろっていない hosted_file の行は作らない。消すときは hosted_file の行を先に消す。
  * - 状態は [HostedStore] のまま、起動時にデータベースから読み、いつもの間隔で、変わったところだけ書く。
  * - 以前の storage: files の hosting.json とフォルダがあれば、最初に取り込む ([migrate])。
+ * - ファイルの持ち主 (hosted_owner)、看板の作者 (sign_author)、監査ログ (hosted_audit) は別の表に置く。assets サーバーが読む表の形は変えない。
+ *   hosted_owner の行がないファイル (記録を始める前からあるものなど) は、作者が分からないファイルで、だれの上限にも数えない。
  */
 internal class DbHostingStorage(
     private val logger: Logger,
@@ -40,12 +42,17 @@ internal class DbHostingStorage(
     private val tSource = "${prefix}hosted_source"
     private val tOrigin = "${prefix}sign_origin"
     private val tState = "${prefix}state"
+    private val tOwner = "${prefix}hosted_owner"
+    private val tAuthor = "${prefix}sign_author"
+    private val tAudit = "${prefix}hosted_audit"
 
     // データベースにあるもの (最後に読んだ・書いたもの)。save はこれとの差分だけ書く
     private val rows = HashMap<String, Long>()
     private val sources = HashMap<String, String>()
     private val origins = HashMap<String, Pair<String, String>>()
     private val states = HashMap<String, String>()
+    private val owners = HashMap<String, String>()
+    private val authors = HashMap<String, HostedStore.SignAuthor>()
 
     // ---- 読み込み ----
 
@@ -54,6 +61,8 @@ internal class DbHostingStorage(
         val sources = HashMap<String, String>()
         val origins = HashMap<String, Pair<String, String>>()
         val states = HashMap<String, String>()
+        val owners = HashMap<String, String>()
+        val authors = HashMap<String, HostedStore.SignAuthor>()
         var bad = 0
     }
 
@@ -64,13 +73,16 @@ internal class DbHostingStorage(
         } catch (e: SQLException) {
             throw IOException("Could not read the hosting tables: " + Db.describe(e), e)
         }
-        rows.clear(); sources.clear(); origins.clear(); states.clear()
+        rows.clear(); sources.clear(); origins.clear(); states.clear(); owners.clear(); authors.clear()
         for (f in l.files.values) {
             store.add(f)
             rows[f.id] = f.lastUsedAt
         }
         sources.putAll(l.sources)
         origins.putAll(l.origins)
+        owners.putAll(l.owners)
+        authors.putAll(l.authors)
+        store.authors.putAll(l.authors)
         for (name in HostedStore.STATE_NAMES) {
             val json = l.states[name] ?: continue
             try {
@@ -92,11 +104,13 @@ internal class DbHostingStorage(
         db.update(c, "DELETE FROM $tChunk WHERE id NOT IN (SELECT id FROM $tFile)")
         db.update(c, "DELETE FROM $tSource WHERE file_id NOT IN (SELECT id FROM $tFile)")
         db.update(c, "DELETE FROM $tOrigin WHERE file_id NOT IN (SELECT id FROM $tFile)")
+        db.update(c, "DELETE FROM $tOwner WHERE file_id NOT IN (SELECT id FROM $tFile)")
         val l = Loaded()
-        db.query(c, "SELECT id, ext, size, hosted_at, last_used_at FROM $tFile") { rs ->
+        db.query(c, "SELECT id, ext, size, hosted_at, last_used_at, sha256 FROM $tFile") { rs ->
             while (rs.next()) {
                 try {
                     val f = HostedStore.checkedFile(rs.getString(1).trim(), rs.getString(2), rs.getLong(3), rs.getLong(4), rs.getLong(5))
+                    f.sha256 = HostedStore.checkSha256(rs.getString(6))
                     l.files[f.id] = f
                 } catch (e: RuntimeException) {
                     l.bad++
@@ -123,6 +137,29 @@ internal class DbHostingStorage(
                     val url = HostedStore.checkUrl(rs.getString(3))
                     f.origins[key] = url
                     l.origins[key] = f.id to url
+                } catch (e: RuntimeException) {
+                    l.bad++
+                }
+            }
+        }
+        db.query(c, "SELECT file_id, player_uuid FROM $tOwner") { rs ->
+            while (rs.next()) {
+                val f = l.files[rs.getString(1).trim()] ?: continue
+                val owner = HostedStore.checkOwner(rs.getString(2))
+                if (owner == null) {
+                    l.bad++
+                    continue
+                }
+                f.owner = owner
+                l.owners[f.id] = owner
+            }
+        }
+        db.query(c, "SELECT sign_key, player_uuid, url, written_at FROM $tAuthor") { rs ->
+            while (rs.next()) {
+                try {
+                    val key = HostedStore.checkKey(rs.getString(1))
+                    val author = HostedStore.checkedAuthor(rs.getString(2), rs.getString(3), rs.getLong(4))
+                    if (author == null) l.bad++ else l.authors[key] = author
                 } catch (e: RuntimeException) {
                     l.bad++
                 }
@@ -174,6 +211,27 @@ internal class DbHostingStorage(
         db.batch(c, "INSERT INTO $tOrigin (sign_key, file_id, original_url) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE file_id = VALUES(file_id), original_url = VALUES(original_url)",
             newOrigins.map { arrayOf<Any?>(it.first, it.second.first, it.second.second) })
         for ((key, v) in newOrigins) origins[key] = v
+
+        val curOwners = HashMap<String, String>()
+        for (f in store.files.values) {
+            val owner = f.owner
+            if (owner != null && f.id in rows) curOwners[f.id] = owner
+        }
+        val goneOwners = owners.keys.filter { it !in curOwners }
+        db.batch(c, "DELETE FROM $tOwner WHERE file_id = ?", goneOwners.map { arrayOf<Any?>(it) })
+        goneOwners.forEach { owners.remove(it) }
+        val newOwners = curOwners.entries.filter { owners[it.key] != it.value }.map { it.key to it.value }
+        db.batch(c, "INSERT INTO $tOwner (file_id, player_uuid) VALUES (?, ?) ON DUPLICATE KEY UPDATE player_uuid = VALUES(player_uuid)",
+            newOwners.map { arrayOf<Any?>(it.first, it.second) })
+        for ((id, owner) in newOwners) owners[id] = owner
+
+        val goneAuthors = authors.keys.filter { !store.authors.containsKey(it) }
+        db.batch(c, "DELETE FROM $tAuthor WHERE sign_key = ?", goneAuthors.map { arrayOf<Any?>(it) })
+        goneAuthors.forEach { authors.remove(it) }
+        val newAuthors = store.authors.entries.filter { authors[it.key] != it.value }.map { it.key to it.value }
+        db.batch(c, "INSERT INTO $tAuthor (sign_key, player_uuid, url, written_at) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE player_uuid = VALUES(player_uuid), url = VALUES(url), written_at = VALUES(written_at)",
+            newAuthors.map { arrayOf<Any?>(it.first, it.second.uuid, it.second.url, it.second.at) })
+        for ((key, v) in newAuthors) authors[key] = v
 
         for (name in HostedStore.STATE_NAMES) {
             val json = store.stateJson(name).toString()
@@ -231,8 +289,10 @@ internal class DbHostingStorage(
                     db.update(c, "DELETE FROM $tChunk WHERE id = ?", f.id)
                     throw IOException("The content does not match ${f.fileName}")
                 }
+                val sha256 = HexFormat.of().formatHex(digest.digest())
                 db.update(c, "INSERT INTO $tFile (id, ext, content_type, size, chunk_size, chunks, sha256, hosted_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    f.id, f.ext, HostingPolicy.contentTypeFor(f.ext), size, CHUNK_SIZE, seq, HexFormat.of().formatHex(digest.digest()), f.hostedAt, f.lastUsedAt)
+                    f.id, f.ext, HostingPolicy.contentTypeFor(f.ext), size, CHUNK_SIZE, seq, sha256, f.hostedAt, f.lastUsedAt)
+                f.sha256 = sha256
             }
             rows[f.id] = f.lastUsedAt
         }
@@ -250,15 +310,29 @@ internal class DbHostingStorage(
         }
     }
 
-    /** hosted_file の行を先に消してから (assets サーバーがもう配らないように)、中身・元の URL・看板の元の URL */
+    /** hosted_file の行を先に消してから (assets サーバーがもう配らないように)、中身・元の URL・看板の元の URL・持ち主 */
     private fun removeRows(c: Connection, id: String) {
         db.update(c, "DELETE FROM $tFile WHERE id = ?", id)
         db.update(c, "DELETE FROM $tChunk WHERE id = ?", id)
         db.update(c, "DELETE FROM $tSource WHERE file_id = ?", id)
         db.update(c, "DELETE FROM $tOrigin WHERE file_id = ?", id)
+        if (id in owners) db.update(c, "DELETE FROM $tOwner WHERE file_id = ?", id)
         rows.remove(id)
         sources.values.removeIf { it == id }
         origins.values.removeIf { it.first == id }
+        owners.remove(id)
+    }
+
+    @Synchronized
+    override fun audit(entries: List<AuditEntry>) {
+        try {
+            db.use { c ->
+                db.batch(c, "INSERT INTO $tAudit (event_at, kind, file_id, sha256, size, url, sign_key, player_uuid) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    entries.map { arrayOf<Any?>(it.at, it.kind, it.fileId, it.sha256, it.size, it.url, it.signKey, it.playerUuid) })
+            }
+        } catch (e: SQLException) {
+            throw IOException("Could not write the audit log to the database: " + Db.describe(e), e)
+        }
     }
 
     override fun close() = db.close()
@@ -309,6 +383,7 @@ internal class DbHostingStorage(
             if (existing != null) {
                 existing.sources.addAll(f.sources)
                 for ((k, v) in f.origins) existing.origins.putIfAbsent(k, v)
+                if (existing.owner == null) existing.owner = f.owner
                 store.add(existing)
                 continue
             }
@@ -320,6 +395,7 @@ internal class DbHostingStorage(
             val nf = HostedStore.HostedFile(f.id, f.ext, Files.size(path), f.hostedAt, f.lastUsedAt)
             nf.sources.addAll(f.sources)
             nf.origins.putAll(f.origins)
+            nf.owner = f.owner
             if (importFile(nf, path, store)) imported++ else skipped++
         }
         // hosting.json にない、フォルダのファイル (看板はもうこのファイルを指しているかもしれない)
@@ -335,7 +411,9 @@ internal class DbHostingStorage(
         for ((k, v) in old.candidates) store.candidates.putIfAbsent(k, v)
         for ((k, v) in old.failures) store.failures.putIfAbsent(k, v)
         for ((k, v) in old.rewrites) store.rewrites.putIfAbsent(k, v)
+        for ((k, v) in old.authors) store.authors.putIfAbsent(k, v)
         store.denied.addAll(old.denied)
+        store.approved.addAll(old.approved)
         if (state == null && imported == 0) return
         store.dirty = true
         save(store)
@@ -370,7 +448,10 @@ internal class DbHostingStorage(
         private const val MAX_STATE_CHARS = 64 * 1024 * 1024
         private val FILE_NAME = Regex("([a-z2-7]{12})\\.([a-z0-9]{1,10})")
 
-        /** 表 (assets サーバーが読むので、形を変えない)。時刻はすべて epoch ミリ秒 */
+        /**
+         * 表 (はじめの 6 つは assets サーバーが読むので、形を変えない)。時刻はすべて epoch ミリ秒。
+         * あとの 3 つは assets サーバーは読まない。表を足すだけで、これまでの表と行には手を付けない。
+         */
         fun schema(prefix: String): List<String> = listOf(
             "CREATE TABLE IF NOT EXISTS ${prefix}hosted_file (id CHAR(12) PRIMARY KEY, ext VARCHAR(10) NOT NULL, content_type VARCHAR(100) NOT NULL, " +
                 "size BIGINT NOT NULL, chunk_size INT NOT NULL, chunks INT NOT NULL, sha256 CHAR(64) NOT NULL, hosted_at BIGINT NOT NULL, last_used_at BIGINT NOT NULL)",
@@ -379,6 +460,10 @@ internal class DbHostingStorage(
             "CREATE TABLE IF NOT EXISTS ${prefix}sign_origin (sign_key VARCHAR(128) PRIMARY KEY, file_id CHAR(12) NOT NULL, original_url TEXT NOT NULL, KEY (file_id))",
             "CREATE TABLE IF NOT EXISTS ${prefix}state (name VARCHAR(32) PRIMARY KEY, json LONGTEXT NOT NULL)",
             "CREATE TABLE IF NOT EXISTS ${prefix}client (ip_hash BINARY(32) PRIMARY KEY, last_seen BIGINT NOT NULL, online TINYINT NOT NULL)",
+            "CREATE TABLE IF NOT EXISTS ${prefix}hosted_owner (file_id CHAR(12) PRIMARY KEY, player_uuid CHAR(36) NOT NULL, KEY (player_uuid))",
+            "CREATE TABLE IF NOT EXISTS ${prefix}sign_author (sign_key VARCHAR(128) PRIMARY KEY, player_uuid CHAR(36) NOT NULL, url TEXT NOT NULL, written_at BIGINT NOT NULL, KEY (player_uuid))",
+            "CREATE TABLE IF NOT EXISTS ${prefix}hosted_audit (seq BIGINT AUTO_INCREMENT PRIMARY KEY, event_at BIGINT NOT NULL, kind VARCHAR(16) NOT NULL, file_id CHAR(12) NOT NULL, " +
+                "sha256 VARCHAR(64) NOT NULL, size BIGINT NOT NULL, url TEXT NOT NULL, sign_key VARCHAR(128) NULL, player_uuid CHAR(36) NULL, KEY (file_id), KEY (player_uuid))",
         )
 
         /** 設定のデータベースへの接続 (つないだら、表がなければ作る) */

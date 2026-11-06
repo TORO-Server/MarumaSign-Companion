@@ -6,11 +6,13 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.security.DigestOutputStream
 import java.security.MessageDigest
+import java.util.HexFormat
 
 /**
  * ホストするために、看板の URL の中身を読み込む。
  * つなぎ方はリンクの検査と同じ [SafeHttp] (検証したアドレスにだけつなぐ・内部へはつながない・期限と上限)。
  * 転送は自前で追い、ホップごとに URL の確認をやり直す。https から http への転送の先は読まない。
+ * 同時に複数のスレッドから呼んでよい。
  */
 class HostFetcher internal constructor(
     private val http: SafeHttp,
@@ -18,11 +20,13 @@ class HostFetcher internal constructor(
     private val throttle: HostThrottle,
     private val maxRedirects: Int,
     private val allowedExtensions: Set<String>,
+    /** ホストしてよいホストか (exclude-hosts と allow-hosts)。転送の先でも確かめる */
+    private val hostPermitted: (String?) -> Boolean = { true },
 ) {
     sealed interface Result
 
-    /** 読み込めた。file は一時ファイル (呼ぶ側が動かすか消す) */
-    class Fetched(val file: Path, val ext: String, val size: Long, val id: String) : Result
+    /** 読み込めた。file は一時ファイル (呼ぶ側が動かすか消す)。sha256 は中身の SHA-256 (16 進) */
+    class Fetched(val file: Path, val ext: String, val size: Long, val id: String, val sha256: String) : Result
 
     class Rejected(val reason: HostingPolicy.Reject) : Result
 
@@ -36,6 +40,8 @@ class HostFetcher internal constructor(
         val visited = HashSet<String>()
         var cur = start
         for (hop in 0..maxRedirects) {
+            if (Thread.currentThread().isInterrupted) return Deferred // 止めている途中
+            if (!hostPermitted(cur.host)) return Rejected(HostingPolicy.Reject.UNSAFE)
             if (!visited.add(cur.toString())) return Rejected(HostingPolicy.Reject.HTTP)
             val now = System.currentTimeMillis()
             val at = throttle.reserve(cur.host, now)
@@ -76,11 +82,12 @@ class HostFetcher internal constructor(
                 when (resp.status) {
                     200 -> {
                         reject?.let { return Rejected(it) }
-                        if (resp.truncated) return Rejected(if (resp.bodyBytes >= maxBytes) HostingPolicy.Reject.TOO_LARGE else HostingPolicy.Reject.FAILED)
+                        if (resp.truncated) return Rejected(if (resp.overLimit) HostingPolicy.Reject.TOO_LARGE else HostingPolicy.Reject.FAILED)
                         if (resp.bodyBytes == 0L) return Rejected(HostingPolicy.Reject.HTTP)
+                        val sha256 = HexFormat.of().formatHex((digest.clone() as MessageDigest).digest())
                         digest.update(".$ext".toByteArray(Charsets.US_ASCII))
                         keep = true
-                        return Fetched(tmp, ext, resp.bodyBytes, idOf(digest.digest()))
+                        return Fetched(tmp, ext, resp.bodyBytes, idOf(digest.digest()), sha256)
                     }
                     301, 302, 303, 307, 308 -> {
                         val location = resp.location ?: return Rejected(HostingPolicy.Reject.HTTP)
@@ -100,6 +107,11 @@ class HostFetcher internal constructor(
             }
         }
         return Rejected(HostingPolicy.Reject.HTTP)
+    }
+
+    /** 止めるとき: 開いているソケットを閉じる (止まっている読み込みが、すぐ終わる) */
+    fun close() {
+        http.close()
     }
 
     companion object {

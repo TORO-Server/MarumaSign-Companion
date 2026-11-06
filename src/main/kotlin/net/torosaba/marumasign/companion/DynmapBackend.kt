@@ -44,6 +44,15 @@ internal class DynmapBackend(private val plugin: MarumaSignCompanion) : MapBacke
     private val signatures: MutableMap<String, String> = HashMap()
     private val worldNames: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
+    // 看板の編集は 1 回の更新にまとめる (更新は全部の看板を見直すので、編集ごとには行わない)
+    private val refresher = Coalescer("MarumaSignCompanion-dynmap-refresh", REFRESH_WINDOW_MILLIS, Runnable {
+        try {
+            refresh()
+        } catch (e: RuntimeException) {
+            plugin.logger.warning("Dynmap marker refresh failed: $e")
+        }
+    })
+
     @Volatile
     private var active = false
     private val listener: DynmapCommonAPIListener = object : DynmapCommonAPIListener() {
@@ -65,9 +74,11 @@ internal class DynmapBackend(private val plugin: MarumaSignCompanion) : MapBacke
 
     override fun start() {
         DynmapCommonAPIListener.register(listener)
+        refresher.start()
     }
 
     override fun stop() {
+        refresher.stop()
         DynmapCommonAPIListener.unregister(listener)
         synchronized(lock) {
             active = false
@@ -281,11 +292,11 @@ internal class DynmapBackend(private val plugin: MarumaSignCompanion) : MapBacke
     }
 
     override fun signUpdated(worldName: String, sign: SignRecord, view: MarkerHtml.View?) {
-        if (worldNames.contains(worldName)) refresh()
+        if (worldNames.contains(worldName)) refresher.request()
     }
 
     override fun signRemoved(worldName: String, x: Int, y: Int, z: Int) {
-        if (worldNames.contains(worldName)) refresh()
+        if (worldNames.contains(worldName)) refresher.request()
     }
 
     override fun linkStateChanged() {
@@ -294,6 +305,7 @@ internal class DynmapBackend(private val plugin: MarumaSignCompanion) : MapBacke
 
     companion object {
         private const val POPUP_SIZE = 320
+        private const val REFRESH_WINDOW_MILLIS = 5_000L
         private val TIME: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault())
 
         /** 状態からレイヤーを決める。出さないものは null (未検査、一時的な 1 回の失敗、showOk でない正常) */

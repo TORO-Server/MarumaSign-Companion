@@ -117,7 +117,7 @@ internal class AdminCommands(private val plugin: MarumaSignCompanion?) {
     fun complete(args: Array<String>): List<String> {
         if (args.size == 1) return filter(SUBCOMMANDS, args[0])
         if (args.size == 2 && args[0].equals("recheck", ignoreCase = true)) return filter(listOf("all-broken"), args[1])
-        if (args.size == 2 && args[0].equals("hosting", ignoreCase = true)) return filter(listOf("status", "list", "remove"), args[1])
+        if (args.size == 2 && args[0].equals("hosting", ignoreCase = true)) return filter(listOf("status", "list", "remove", "pending", "approve", "reject"), args[1])
         return listOf()
     }
 

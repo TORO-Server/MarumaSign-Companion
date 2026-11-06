@@ -1,6 +1,7 @@
 package net.torosaba.marumasign.companion
 
 import net.kyori.adventure.text.Component
+import net.kyori.adventure.text.event.ClickEvent
 import net.kyori.adventure.text.format.NamedTextColor
 import org.bukkit.Bukkit
 import org.bukkit.World
@@ -15,6 +16,7 @@ import java.nio.file.Path
 import java.util.Locale
 import java.util.TreeMap
 import java.util.TreeSet
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.ExecutorService
@@ -70,9 +72,11 @@ class MarumaSignCompanion : JavaPlugin() {
         }
         if (settings.link.enabled) {
             val filter = UrlFilter(settings.blockedHosts)
-            for (bad in AddressDenyList(settings.link.extraBlockedAddresses).rejected()) {
+            val denyList = AddressDenyList(settings.link.extraBlockedAddresses)
+            for (bad in denyList.rejected()) {
                 logger.warning("link-check.extra-blocked-addresses: ignoring an entry that is not an address or range: " + SafeText.logUrl(bad))
             }
+            extraBlockedAddressesWarning(denyList)?.let { logger.warning(it) }
             val throttle = HostThrottle(settings.link)
             val probe = LinkProbe.create(settings.link, filter, throttle)
             val checker = LinkChecker(logger, dataFolder.toPath().resolve("linkcheck.json"), settings.link,
@@ -222,7 +226,7 @@ class MarumaSignCompanion : JavaPlugin() {
     private fun hostingCommand(sender: CommandSender, args: Array<String>) {
         val h = hosting
         if (h == null) {
-            sender.sendMessage(Component.text("ホストは無効です (config.yml の hosting.enabled と hosting.public-base-url、link-check.enabled)。", NamedTextColor.YELLOW))
+            sender.sendMessage(Component.text("ホストは無効です (config.yml の hosting.enabled と hosting.public-base-url、link-check.enabled。storage: database では hosting.database.user と password も必要)。", NamedTextColor.YELLOW))
             return
         }
         val sub = if (args.size >= 2) args[1].lowercase(Locale.ROOT) else "status"
@@ -240,9 +244,28 @@ class MarumaSignCompanion : JavaPlugin() {
                 sender.sendMessage(Component.text("ホストしているファイル: " + files.size + " 件 (ページ $p/$pages)", NamedTextColor.GOLD))
                 for (f in files.drop((p - 1) * AdminCommands.PAGE_SIZE).take(AdminCommands.PAGE_SIZE)) {
                     val source = f.sources.firstOrNull()?.let { SafeText.displayUrl(it, 50) } ?: ""
+                    val owner = f.owner?.let { " 作者 " + playerName(it) } ?: ""
                     sender.sendMessage(Component.text(f.fileName, NamedTextColor.AQUA)
-                        .append(Component.text(" " + f.size / 1024 + " KB " + source, NamedTextColor.GRAY)))
+                        .append(Component.text(" " + f.size / 1024 + " KB " + source + owner, NamedTextColor.GRAY)))
                 }
+            }
+            "pending" -> pendingCommand(sender, h, args)
+            "approve", "reject" -> {
+                val key = if (args.size == 3) args[2].lowercase(Locale.ROOT) else ""
+                if (!key.matches(HostedStore.ID)) {
+                    sender.sendMessage(Component.text("使い方: /marumasign hosting $sub <キー> (キーは pending の行の先頭)", NamedTextColor.RED))
+                    return
+                }
+                val done: (String?) -> Unit = { url ->
+                    Bukkit.getScheduler().runTask(this, Runnable {
+                        sender.sendMessage(when {
+                            url == null -> Component.text("そのキーの URL は承認待ちにありません。", NamedTextColor.YELLOW)
+                            sub == "approve" -> Component.text("承認しました: " + SafeText.displayUrl(url, 60), NamedTextColor.GREEN)
+                            else -> Component.text("断りました (この URL はホストしません): " + SafeText.displayUrl(url, 60), NamedTextColor.GREEN)
+                        })
+                    })
+                }
+                if (sub == "approve") h.approve(key, sender.name, done) else h.reject(key, sender.name, done)
             }
             "remove" -> {
                 val id = if (args.size == 3) args[2].substringBefore('.').lowercase(Locale.ROOT) else ""
@@ -264,6 +287,7 @@ class MarumaSignCompanion : JavaPlugin() {
                 sender.sendMessage(Component.text("候補 " + st.candidates.size + " / 書き換え待ちの看板 " + st.rewrites.size + " / ホストしない URL " + st.failures.size
                         + " / 取り下げ " + st.denied.size, NamedTextColor.WHITE))
                 sender.sendMessage(Component.text("配信先: " + settings.hosting.publicBaseUrl, NamedTextColor.GRAY))
+                for (line in h.describeLimits()) sender.sendMessage(Component.text(line, NamedTextColor.GRAY))
                 for (line in h.describeStorage()) sender.sendMessage(Component.text(line, NamedTextColor.GRAY))
                 if (h.storageKind == HostingSettings.DATABASE) {
                     val ct = clients
@@ -271,6 +295,40 @@ class MarumaSignCompanion : JavaPlugin() {
                 }
             }
         }
+    }
+
+    /** /marumasign hosting pending [ページ]: 承認を待っている URL の一覧 (キーをクリックすると、approve の入力を用意する。実行はしない) */
+    private fun pendingCommand(sender: CommandSender, h: HostingManager, args: Array<String>) {
+        if (!h.requiresApproval) {
+            sender.sendMessage(Component.text("承認制は無効です (config.yml の hosting.require-approval)。", NamedTextColor.YELLOW))
+            return
+        }
+        val page = if (args.size >= 3) AdminCommands.parsePage(args[2]) else 1
+        if (page == null) {
+            sender.sendMessage(Component.text("ページ番号は 1 から 9999 の数字です。", NamedTextColor.RED))
+            return
+        }
+        val urls = h.pendingApprovals()
+        val pages = Math.max(1, (urls.size + AdminCommands.PAGE_SIZE - 1) / AdminCommands.PAGE_SIZE)
+        val p = Math.min(page, pages)
+        sender.sendMessage(Component.text("承認待ちの URL: " + urls.size + " 件 (ページ $p/$pages)。/marumasign hosting approve <キー> か reject <キー>", NamedTextColor.GOLD))
+        for (url in urls.drop((p - 1) * AdminCommands.PAGE_SIZE).take(AdminCommands.PAGE_SIZE)) {
+            val key = HostedStore.urlKey(url)
+            val author = h.store.authors.values.firstOrNull { it.url == url }?.let { " 作者 " + playerName(it.uuid) } ?: ""
+            sender.sendMessage(Component.text(key, NamedTextColor.AQUA)
+                .clickEvent(ClickEvent.suggestCommand("/marumasign hosting approve $key"))
+                .append(Component.text(" " + SafeText.displayUrl(url, 60) + author, NamedTextColor.GRAY)))
+        }
+    }
+
+    /** 記録の UUID から、表示する名前。分からなければ UUID の頭 */
+    private fun playerName(uuid: String): String {
+        val name = try {
+            Bukkit.getOfflinePlayer(UUID.fromString(uuid)).name
+        } catch (e: IllegalArgumentException) {
+            null
+        }
+        return if (name.isNullOrEmpty()) uuid.take(8) else SafeText.clean(name, 16)
     }
 
     @Volatile
@@ -293,11 +351,21 @@ class MarumaSignCompanion : JavaPlugin() {
             logger.warning("hosting.enabled is true, but hosting.public-base-url is empty; hosting is off")
             return
         }
+        val credentialProblem = hs.databaseCredentialProblem()
+        if (credentialProblem != null) {
+            logger.severe("hosting.storage is database, but $credentialProblem in config.yml; hosting is off. "
+                    + "Create a database user for this plugin and set both keys. The rest of the plugin keeps working, "
+                    + "but hosted files are not updated and the clients that are playing are not recorded for the assets server")
+            return
+        }
+        if (hs.usesRootDatabaseUser) {
+            logger.warning("hosting.database.user is root; use a database user that can only reach this plugin's database")
+        }
         val o = SafeHttp.Options()
         o.connectTimeoutMillis = LinkSettings.clamp(settings.link.connectTimeoutSeconds, 1, 30) * 1000
         o.userAgent = LinkSettings.cleanUserAgent(settings.link.userAgent)
         o.denyList = AddressDenyList(settings.link.extraBlockedAddresses)
-        val fetcher = HostFetcher(SafeHttp(o), { url -> probe.strictParse(url) }, throttle, settings.link.maxRedirects, settings.allowedExtensions)
+        val fetcher = HostFetcher(SafeHttp(o), { url -> probe.strictParse(url) }, throttle, settings.link.maxRedirects, settings.allowedExtensions, hs::hostPermitted)
         val m = HostingManager(this, logger, hs, dataFolder.toPath().resolve("hosting.json"), fetcher, settings.allowedExtensions,
             signs = { worlds.mapValues { it.value.store.all() } },
             linkState = { url -> linkChecker?.state(url) },
@@ -638,8 +706,8 @@ class MarumaSignCompanion : JavaPlugin() {
         }
     }
 
-    /** ゲーム中の看板の追加・変更を反映する */
-    internal fun signChanged(world: World, x: Int, y: Int, z: Int, text: String, orient: Int) {
+    /** ゲーム中の看板の追加・変更を反映する。author は書いたプレイヤー (プラグインが書き換えたときなどは null) */
+    internal fun signChanged(world: World, x: Int, y: Int, z: Int, text: String, orient: Int, author: UUID? = null) {
         val w = worlds[world.name] ?: return
         val spec = MarumaSpec.parse(text)
         if (spec == null || spec.url.length > UrlFilter.MAX_URL_LENGTH) {
@@ -650,7 +718,11 @@ class MarumaSignCompanion : JavaPlugin() {
         w.store.liveSet(record)
         val checker = linkChecker
         if (!isSelfHostedUrl(record.url)) checker?.prioritize(record.url)
-        hosting?.kick()
+        val h = hosting
+        if (h != null) {
+            if (author != null) h.signWritten(world.name, x, y, z, record.url, author)
+            h.kick()
+        }
         val view = classify(record)
         val worldName = world.name
         runLive {
@@ -686,6 +758,12 @@ class MarumaSignCompanion : JavaPlugin() {
 
     companion object {
         internal const val MARKER_SET_ID = "marumasign"
+
+        /** link-check.extra-blocked-addresses が空 (読めるものがない) ときの警告。起動のログに出す */
+        internal fun extraBlockedAddressesWarning(denyList: AddressDenyList): String? =
+            if (denyList.size() > 0) null
+            else "link-check.extra-blocked-addresses is empty: add this server's public IP address and WAN-side range, " +
+                "so that link checks and hosting do not connect back to this network (see config.yml)"
 
         /** config.yml の link-check を読む。値の範囲は収める (不正な値で検査が暴走しないように) */
         internal fun readLinkSettings(c: ConfigurationSection): LinkSettings {

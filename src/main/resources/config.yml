@@ -208,6 +208,8 @@ web3d:
 #    チャンクが読み込まれたときに書き換えます)。看板を書いた人の URL は hosting.json に残り、取り下げたときに戻します
 #  - どの看板にも使われなくなってから unhost-after-days たったファイルは、ホストをやめて消します
 #  - 管理者は /marumasign hosting remove <id> で取り下げられます (元の URL はもうホストせず、看板は元の URL に戻します)
+#  - 看板を書いたプレイヤーを記録し、プレイヤーごとの上限 (quota) に数えます。ホストした内容 (看板の場所・作者・URL・大きさ・ハッシュ) は監査ログに残します
+#    (storage: database では表 <table-prefix>hosted_audit、files では hosting-audit.jsonl)
 # 公開するには、内蔵の Web サーバー (port) の前に HTTPS の逆プロキシ (Cloudflare Tunnel や nginx) を置き、そのアドレスを public-base-url にします。
 # 外の Web サーバーに配らせるときは、port: 0 にして、directory をその Web サーバーの公開フォルダにします。
 # storage: database では、ファイルも状態もデータベースに入れ、データベースを読む別の assets サーバーが配ります (内蔵の Web サーバーは使いません)。
@@ -221,7 +223,10 @@ hosting:
   database:
     # データベースがなければ作ります (表も)
     url: "jdbc:mysql://tidb:4000/marumasign"
-    user: "root"
+    # storage: database では user と password が必須です。どちらかが空なら、ホストを始めません (ほかの機能は動きます)。
+    # このプラグイン専用のユーザーを作って、このデータベースだけの権限を与えてください (表を確かめる CREATE TABLE IF NOT EXISTS があるので CREATE も要ります):
+    #   GRANT SELECT, INSERT, UPDATE, DELETE, CREATE ON marumasign.* TO '<ユーザー>'@'%';
+    user: ""
     password: ""
     # 表の名前の頭 (英数字と _ だけ)
     table-prefix: "msc_"
@@ -244,12 +249,25 @@ hosting:
   # 1 つのファイルの上限と、全体の上限 (MB)
   max-file-mb: 32
   max-total-mb: 4096
+  # ホストするファイルの数の全体の上限
+  max-total-files: 20000
+  # プレイヤーごとの上限 (0 で上限なし)。看板を書いたプレイヤーの分として数えます。上限に達したプレイヤーの URL は、空くまで待ちます (看板はそのまま見えます)。
+  # 作者が分からないファイル (記録を始める前からある看板のものなど) は、だれの分にも数えません (全体の上限には数えます)。
+  quota:
+    per-player-files: 100
+    per-player-mb: 256
   # 1 つのファイルを読み込む時間の上限 (秒)
   download-timeout-seconds: 120
-  # 1 時間あたりに読み込む数の上限
+  # 同時に読み込む数 (1-8)。1 人のプレイヤーの分は同時に 1 件まで
+  download-concurrency: 2
+  # 1 時間あたりに読み込む数の上限。1 人のプレイヤーの分は、この 3 分の 1 まで
   per-hour-limit: 30
-  # ホストしないホスト (そのホストと、その下のサブドメイン)
+  # ホストしないホスト (そのホストと、その下のサブドメイン。転送の先にも当てます)
   exclude-hosts: []
+  # ホストしてよいホスト (そのホストと、その下のサブドメイン。転送の先にも当てます)。空なら制限しません
+  allow-hosts: []
+  # true なら、管理者が /marumasign hosting approve で承認した URL だけホストします (一覧は /marumasign hosting pending)。ホスト済みのファイルには影響しません
+  require-approval: false
 
 scan:
   # 看板を調べるワールド。空なら、読み込まれたワールドすべて (BlueMap / Dynmap が地図にするワールドは、ここになくても調べます)

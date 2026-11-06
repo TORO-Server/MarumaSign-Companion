@@ -18,13 +18,27 @@ class HostingSettings {
     var unhostAfterDays = 14
     var maxFileMb = 32
     var maxTotalMb = 4096
+    /** ホストするファイルの数の上限 (全体) */
+    var maxTotalFiles = 20_000
+    /** 1 人のプレイヤーの分のファイルの数と容量 (MB) の上限。0 なら上限なし。作者が分からないファイルは、だれの分にも数えない */
+    var perPlayerFiles = 100
+    var perPlayerMb = 256
     var downloadTimeoutSeconds = 120
+    /** 同時に読み込む数 */
+    var downloadConcurrency = 2
     var perHourLimit = 30
     var excludeHosts: List<String> = listOf()
+    /** 書いてあれば、そのホスト (と下のサブドメイン) の URL だけホストする */
+    var allowHosts: List<String> = listOf()
+    /** allow-hosts に何か書いてあるか (読める行がひとつもなくても、制限なしには戻さない) */
+    var allowHostsSet = false
+    /** true なら、管理者が承認した URL だけホストする */
+    var requireApproval = false
     /** files: フォルダと hosting.json。database: データベース (TiDB / MySQL) に入れ、内蔵の Web サーバーは使わない */
     var storage = FILES
     var dbUrl = "jdbc:mysql://tidb:4000/marumasign"
-    var dbUser = "root"
+    /** 既定はなし。storage: database では、設定されていなければホストを始めない ([databaseCredentialProblem]) */
+    var dbUser = ""
     var dbPassword = ""
     /** 表の名前の頭 (英数字と _ だけ) */
     var tablePrefix = "msc_"
@@ -37,7 +51,29 @@ class HostingSettings {
 
     val maxFileBytes: Long get() = maxFileMb * 1024L * 1024L
     val maxTotalBytes: Long get() = maxTotalMb * 1024L * 1024L
+    val perPlayerBytes: Long get() = perPlayerMb * 1024L * 1024L
     val usesDatabase: Boolean get() = storage == DATABASE
+
+    /** そのホストの URL をホストしてよいか (exclude-hosts と allow-hosts。そのホストと、その下のサブドメイン)。転送の先にも使う */
+    fun hostPermitted(host: String?): Boolean {
+        val h = host?.trim()?.lowercase(Locale.ROOT)?.trimEnd('.')
+        if (h.isNullOrEmpty()) return false
+        if (excludeHosts.any { h == it || h.endsWith(".$it") }) return false
+        return !allowHostsSet || allowHosts.any { h == it || h.endsWith(".$it") }
+    }
+
+    /** storage: database で、データベースのユーザーかパスワードが設定されていないときの説明 (ホストを始めない)。問題なければ null */
+    fun databaseCredentialProblem(): String? {
+        if (!usesDatabase) return null
+        val missing = listOfNotNull(
+            "hosting.database.user".takeIf { dbUser.isBlank() },
+            "hosting.database.password".takeIf { dbPassword.isBlank() },
+        )
+        return if (missing.isEmpty()) null else missing.joinToString(" and ") + " not set"
+    }
+
+    /** root で接続する設定か (動くが、このプラグイン専用のユーザーをすすめる) */
+    val usesRootDatabaseUser: Boolean get() = usesDatabase && dbUser.trim().equals("root", ignoreCase = true)
 
     companion object {
         // 看板は表に 320 文字。数値の分を残して、URL の頭はこれまで
@@ -45,6 +81,11 @@ class HostingSettings {
         const val FILES = "files"
         const val DATABASE = "database"
         private val PREFIX = Regex("[A-Za-z0-9_]{0,32}")
+        private val HOST = Regex("[a-z0-9.-]{1,253}")
+
+        /** 設定のホストの 1 行を、比べられる形にする。ホスト名の形でなければ null */
+        private fun hostEntry(raw: String): String? =
+            raw.trim().lowercase(Locale.ROOT).removePrefix("*.").trim('.').takeIf { it.matches(HOST) }
 
         fun read(c: ConfigurationSection, warn: (String) -> Unit): HostingSettings {
             val h = HostingSettings()
@@ -61,11 +102,20 @@ class HostingSettings {
             h.unhostAfterDays = c.getInt("hosting.unhost-after-days", h.unhostAfterDays).coerceIn(1, 3650)
             h.maxFileMb = c.getInt("hosting.max-file-mb", h.maxFileMb).coerceIn(1, 2048)
             h.maxTotalMb = c.getInt("hosting.max-total-mb", h.maxTotalMb).coerceIn(1, 1_048_576)
+            h.maxTotalFiles = c.getInt("hosting.max-total-files", h.maxTotalFiles).coerceIn(1, 1_000_000)
+            h.perPlayerFiles = c.getInt("hosting.quota.per-player-files", h.perPlayerFiles).coerceIn(0, 1_000_000)
+            h.perPlayerMb = c.getInt("hosting.quota.per-player-mb", h.perPlayerMb).coerceIn(0, 1_048_576)
             h.downloadTimeoutSeconds = c.getInt("hosting.download-timeout-seconds", h.downloadTimeoutSeconds).coerceIn(10, 3600)
+            h.downloadConcurrency = c.getInt("hosting.download-concurrency", h.downloadConcurrency).coerceIn(1, 8)
             h.perHourLimit = c.getInt("hosting.per-hour-limit", h.perHourLimit).coerceIn(1, 10_000)
-            h.excludeHosts = c.getStringList("hosting.exclude-hosts").map { it.trim().lowercase(Locale.ROOT) }
-                .filter { it.matches(Regex("[a-z0-9.-]{1,253}")) }
-            val storage = c.getString("hosting.storage", h.storage)?.trim()?.lowercase(Locale.ROOT) ?: h.storage
+            h.excludeHosts = c.getStringList("hosting.exclude-hosts").mapNotNull { hostEntry(it) }
+            val allow = c.getStringList("hosting.allow-hosts").filter { it.isNotBlank() }
+            h.allowHostsSet = allow.isNotEmpty()
+            h.allowHosts = allow.mapNotNull { hostEntry(it) }
+            for (bad in allow.filter { hostEntry(it) == null }) warn("hosting.allow-hosts: ignoring an entry that is not a host name: ${SafeText.clean(bad, 60)}")
+            if (h.allowHostsSet && h.allowHosts.isEmpty()) warn("hosting.allow-hosts has no usable entry; no new URLs are hosted")
+            h.requireApproval = c.getBoolean("hosting.require-approval", h.requireApproval)
+            val storage =c.getString("hosting.storage", h.storage)?.trim()?.lowercase(Locale.ROOT) ?: h.storage
             if (storage == FILES || storage == DATABASE) h.storage = storage
             else warn("Unknown hosting.storage '${SafeText.clean(storage, 40)}'; using ${h.storage}")
             h.dbUrl = c.getString("hosting.database.url", h.dbUrl)?.trim() ?: h.dbUrl
