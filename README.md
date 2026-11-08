@@ -10,7 +10,7 @@ MarumaSign 自体はサーバーに何も要りませんが、看板の URL は�
   [Dynmap](https://github.com/webbukkit/dynmap) が入っていれば、リンク切れの看板を検査の結果ごとのレイヤーで出します。
 
 地図のプラグインはどちらも任意です (`softdepend`。`config.yml` の `bluemap.enabled` `dynmap.enabled` で地図ごとに切り替えられます)。どちらもなくても、看板の一覧・リンクの検査・ホストは動きます。
-TORO サーバー (Paper 26.3) 用。**非公開リポジトリです。公開しないでください。**
+TORO サーバー (Paper 26.3) 用。
 
 旧名は `BlueMapMarumaSign` です。初めて起動したとき、`plugins/BlueMapMarumaSign/` があれば、設定・キャッシュ・検査の結果を `plugins/MarumaSignCompanion/` に写します (旧フォルダは残すので、確認したら消してください)。
 コマンド `/marumasignmap` と権限 `marumasignmap.admin` `bluemapmarumasign.admin` も、引き続き使えます。
