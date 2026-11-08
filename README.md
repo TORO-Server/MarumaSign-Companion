@@ -372,9 +372,8 @@ node src/test/js/marumasign3d.test.js   # 3D 表示のスクリプトのテス�
 - Dynmap は 3D の画像を置けません。
 - 立て看板の rotation の初期値は 26.x では 8 (北) で、プロパティを省略した書き方になっています (読み取りで対応済み。`OrientationTest`)。
 
-## ライセンスについて
+## 利用しているライブラリ
 
-- このプラグインのコードは私的な利用のためのもので、公開しません。
 - MarumaSign (MIT) の看板の形式と URL の確認規則、画像の位置・回転の計算を参考に、同じ判定・計算を自前で書いています (テスト用の頂点データは本体が出力したものです)。
 - `paper-api` と `bluemap-api` (MIT) と `gson` (Apache-2.0) はビルド時の参照だけで、JAR に含めません (サーバーが持っているものを使います)。
 - MySQL Connector/J (GPLv2 + Universal FOSS Exception) は JAR に含めず、Paper が `plugin.yml` の `libraries` で読み込みます。H2 (MPL 2.0 / EPL 1.0) はテストだけで使います。
