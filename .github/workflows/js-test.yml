@@ -7,11 +7,19 @@ on:
     branches: [main]
     paths:
       - 'src/main/resources/web/**'
+      - 'src/main/ts/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.json'
       - 'src/test/js/**'
       - '.github/workflows/js-test.yml'
   pull_request:
     paths:
       - 'src/main/resources/web/**'
+      - 'src/main/ts/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.json'
       - 'src/test/js/**'
       - '.github/workflows/js-test.yml'
 
@@ -25,4 +33,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: marumasign3d.js の試験 (基準データとの突き合わせを含む)
-        run: node src/test/js/marumasign3d.test.js
+        run: |
+          npm ci
+          npm test
+          git diff --exit-code -- src/main/resources/web/marumasign3d.js

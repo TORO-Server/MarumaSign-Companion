@@ -1,0 +1,4 @@
+{
+  "compilerOptions": { "target": "ES2020", "lib": ["ES2020", "DOM"], "types": ["node"], "strict": false, "noImplicitAny": false, "alwaysStrict": false, "noEmit": true, "skipLibCheck": true },
+  "include": ["src/main/ts/marumasign3d.ts", "src/main/ts/globals.d.ts", "src/test/js/marumasign3d.test.ts"]
+}

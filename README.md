@@ -328,7 +328,7 @@ Gradle は Wrapper で 9.3.0 に固定しています (`gradle-wrapper.propertie
 ```
 ./gradlew test      # 単体テスト
 ./gradlew shadowJar # build/libs/MarumaSignCompanion-<版>.jar (Kotlin の標準ライブラリ入り。-thin.jar は入っていないので使わない)
-node src/test/js/marumasign3d.test.js   # 3D 表示のスクリプトのテスト (Node 18 以上)
+npm ci && npm test   # 3D 表示のスクリプト (元は src/main/ts/marumasign3d.ts) をビルドして試験する (Node 18 以上)
 ```
 
 - `OrientationTest`: 看板ブロックの向きの読み取り (1.18-1.21 の `Name`/`Properties` と、26.x の `id`/`properties`・初期値のブロックの書き方)。
@@ -339,7 +339,7 @@ node src/test/js/marumasign3d.test.js   # 3D 表示のスクリプトのテス�
   変わったところだけ書くこと、壊れた行の扱い、`files` からの取り込み (2 回目は二重にしない)、IP の HMAC (IPv4 射影の扱い。別の実装で計算した値と突き合わせ)、`msc_client` の更新、以前の版の行がそのまま残ること。
 - `HostingHardeningTest`: 遅い応答が保存と書き換えを止めないこと、同時の読み込みの上限、プレイヤーごと・全体の上限、作者の記録、空きが足りないときのやり直し、許可リスト、承認、監査ログ、以前の `hosting.json` の読み込み。
 - `CoalescerTest`: Dynmap の更新を 1 回にまとめること。
-- `marumasign3d.test.js`: URL・データの検証、大きさの上限、**MarumaSign 本体の `SignImage` が出した 300 通りの頂点 (`src/test/js/reference-mesh.json`) との一致 (差は 1e-6 以下)**。
+- `marumasign3d.test.ts`: URL・データの検証、大きさの上限、**MarumaSign 本体の `SignImage` が出した 300 通りの頂点 (`src/test/js/reference-mesh.json`) との一致 (差は 1e-6 以下)**。
 
 実際のワールドの region ファイルで試すには、いくつかの `.mca` をフォルダに入れて次のようにします (中身を出力します)。
 

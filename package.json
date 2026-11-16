@@ -1,0 +1,17 @@
+{
+  "name": "marumasign-companion-web",
+  "private": true,
+  "description": "BlueMap 用 3D 表示スクリプトの TypeScript の元と試験 (Gradle の jar へは src/main/resources/web/marumasign3d.js を入れる)",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build:web": "esbuild src/main/ts/marumasign3d.ts --target=es2020 --charset=utf8 --outfile=src/main/resources/web/marumasign3d.js",
+    "build": "npm run typecheck && npm run build:web",
+    "test": "npm run build && tsx src/test/js/marumasign3d.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0"
+  }
+}
