@@ -407,7 +407,7 @@ class HostingDbTest {
             val yaml = YamlConfiguration.loadConfiguration(InputStreamReader(input!!, StandardCharsets.UTF_8))
             val h = HostingSettings.read(yaml) { throw AssertionError(it) }
             assertEquals("files", h.storage)
-            assertEquals("jdbc:mysql://tidb:4000/marumasign", h.dbUrl)
+            assertEquals("", h.dbUrl, "既定の接続先はない")
             assertEquals("", h.dbUser, "既定のユーザーはない")
             assertEquals("", h.dbPassword)
             assertEquals("msc_", h.tablePrefix)
@@ -443,24 +443,29 @@ class HostingDbTest {
 
         // 行がないとき、以前の既定 (root と空のパスワード) には戻らない
         val absent = read("hosting.storage" to "database")
+        assertEquals("", absent.dbUrl)
         assertEquals("", absent.dbUser)
         assertEquals("", absent.dbPassword)
-        assertEquals("hosting.database.user and hosting.database.password not set", absent.databaseCredentialProblem())
+        assertEquals("hosting.database.url and hosting.database.user and hosting.database.password not set", absent.databaseCredentialProblem())
 
+        val url = "hosting.database.url" to "jdbc:mysql://db.example.test:4000/marumasign"
         assertEquals("hosting.database.password not set",
-            read("hosting.storage" to "database", "hosting.database.user" to "marumasign").databaseCredentialProblem())
+            read("hosting.storage" to "database", url, "hosting.database.user" to "marumasign").databaseCredentialProblem())
         assertEquals("hosting.database.password not set",
-            read("hosting.storage" to "database", "hosting.database.user" to "root", "hosting.database.password" to "").databaseCredentialProblem(),
+            read("hosting.storage" to "database", url, "hosting.database.user" to "root", "hosting.database.password" to "").databaseCredentialProblem(),
             "root と空のパスワードを書いてあっても、つながない")
         assertEquals("hosting.database.user not set",
-            read("hosting.storage" to "database", "hosting.database.password" to "x").databaseCredentialProblem())
+            read("hosting.storage" to "database", url, "hosting.database.password" to "x").databaseCredentialProblem())
+        assertEquals("hosting.database.url not set",
+            read("hosting.storage" to "database", "hosting.database.user" to "marumasign", "hosting.database.password" to "x").databaseCredentialProblem(),
+            "接続先がなければ、以前の既定の接続先には戻らない")
 
-        val ok = read("hosting.storage" to "database", "hosting.database.user" to "marumasign", "hosting.database.password" to "x")
+        val ok = read("hosting.storage" to "database", url, "hosting.database.user" to "marumasign", "hosting.database.password" to "x")
         assertNull(ok.databaseCredentialProblem())
         assertFalse(ok.usesRootDatabaseUser)
 
         // root をパスワードつきで書いてあれば動かす (警告だけ)。問題の説明に値を出さない
-        val root = read("hosting.storage" to "database", "hosting.database.user" to "root", "hosting.database.password" to "x")
+        val root = read("hosting.storage" to "database", url, "hosting.database.user" to "root", "hosting.database.password" to "x")
         assertNull(root.databaseCredentialProblem())
         assertTrue(root.usesRootDatabaseUser)
     }
@@ -475,11 +480,11 @@ class HostingDbTest {
 
     @Test
     fun databaseUrlIsSplitForCreateDatabaseAndShownWithoutSecrets() {
-        assertEquals("jdbc:mysql://tidb:4000/" to "marumasign", Db.splitDatabase("jdbc:mysql://tidb:4000/marumasign"))
-        assertEquals("jdbc:mysql://tidb:4000/?useSSL=false" to "bluemap", Db.splitDatabase("jdbc:mysql://tidb:4000/bluemap?useSSL=false"))
-        assertNull(Db.splitDatabase("jdbc:mysql://tidb:4000/"))
-        assertNull(Db.splitDatabase("jdbc:mysql://tidb:4000/a`b"))
-        assertEquals("jdbc:mysql://tidb:4000/marumasign", Db.displayUrl("jdbc:mysql://u:pw@tidb:4000/marumasign?password=pw"))
+        assertEquals("jdbc:mysql://db.example.test:4000/" to "marumasign", Db.splitDatabase("jdbc:mysql://db.example.test:4000/marumasign"))
+        assertEquals("jdbc:mysql://db.example.test:4000/?useSSL=false" to "bluemap", Db.splitDatabase("jdbc:mysql://db.example.test:4000/bluemap?useSSL=false"))
+        assertNull(Db.splitDatabase("jdbc:mysql://db.example.test:4000/"))
+        assertNull(Db.splitDatabase("jdbc:mysql://db.example.test:4000/a`b"))
+        assertEquals("jdbc:mysql://db.example.test:4000/marumasign", Db.displayUrl("jdbc:mysql://u:pw@db.example.test:4000/marumasign?password=pw"))
     }
 
     @Test

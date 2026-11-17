@@ -36,7 +36,8 @@ class HostingSettings {
     var requireApproval = false
     /** files: フォルダと hosting.json。database: データベース (TiDB / MySQL) に入れ、内蔵の Web サーバーは使わない */
     var storage = FILES
-    var dbUrl = "jdbc:mysql://tidb:4000/marumasign"
+    /** JDBC URL (例 jdbc:mysql://db.example.test:4000/marumasign)。既定はなし。storage: database では、設定されていなければホストを始めない ([databaseCredentialProblem]) */
+    var dbUrl = ""
     /** 既定はなし。storage: database では、設定されていなければホストを始めない ([databaseCredentialProblem]) */
     var dbUser = ""
     var dbPassword = ""
@@ -62,10 +63,11 @@ class HostingSettings {
         return !allowHostsSet || allowHosts.any { h == it || h.endsWith(".$it") }
     }
 
-    /** storage: database で、データベースのユーザーかパスワードが設定されていないときの説明 (ホストを始めない)。問題なければ null */
+    /** storage: database で、データベースの URL・ユーザー・パスワードのどれかが設定されていないときの説明 (ホストを始めない)。問題なければ null */
     fun databaseCredentialProblem(): String? {
         if (!usesDatabase) return null
         val missing = listOfNotNull(
+            "hosting.database.url".takeIf { dbUrl.isBlank() },
             "hosting.database.user".takeIf { dbUser.isBlank() },
             "hosting.database.password".takeIf { dbPassword.isBlank() },
         )
@@ -119,7 +121,7 @@ class HostingSettings {
             if (storage == FILES || storage == DATABASE) h.storage = storage
             else warn("Unknown hosting.storage '${SafeText.clean(storage, 40)}'; using ${h.storage}")
             h.dbUrl = c.getString("hosting.database.url", h.dbUrl)?.trim() ?: h.dbUrl
-            if (h.usesDatabase && !h.dbUrl.startsWith("jdbc:")) warn("hosting.database.url must be a JDBC URL (jdbc:mysql://host:port/database)")
+            if (h.usesDatabase && h.dbUrl.isNotEmpty() && !h.dbUrl.startsWith("jdbc:")) warn("hosting.database.url must be a JDBC URL (jdbc:mysql://host:port/database)")
             h.dbUser = c.getString("hosting.database.user", h.dbUser) ?: h.dbUser
             h.dbPassword = c.getString("hosting.database.password", h.dbPassword) ?: h.dbPassword
             val prefix = c.getString("hosting.database.table-prefix", h.tablePrefix)?.trim() ?: h.tablePrefix
