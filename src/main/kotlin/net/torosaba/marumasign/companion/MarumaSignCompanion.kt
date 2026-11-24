@@ -503,15 +503,37 @@ class MarumaSignCompanion : JavaPlugin() {
 
     /** いま看板にあるすべての URL を、検査の対象として知らせる */
     private fun trackLinks() {
-        val checker = linkChecker ?: return
         val h = hosting
         val urls = HashSet<String>()
         for (w in worlds.values) {
             // ホストしている URL は、このサーバー自身なので検査しない (自分にはつながない決まり)
             for (s in w.store.all()) if (!isSelfHostedUrl(s.url)) urls.add(s.url)
         }
-        checker.track(urls)
+        resolver?.track(urls)
+        linkChecker?.track(urls)
         h?.kick()
+    }
+
+    private data class AuthorRate(var windowStart: Long, var count: Int)
+
+    private val authorRates = ConcurrentHashMap<UUID, AuthorRate>()
+
+    private fun allowAuthorChange(author: UUID): Boolean {
+        val now = System.currentTimeMillis()
+        if (authorRates.size >= 4096 && !authorRates.containsKey(author)) {
+            authorRates.entries.removeIf { (_, r) -> now - r.windowStart >= 60_000L }
+            if (authorRates.size >= 4096) return false
+        }
+        val bucket = authorRates.computeIfAbsent(author) { AuthorRate(now, 0) }
+        synchronized(bucket) {
+            if (now - bucket.windowStart >= 60_000L) {
+                bucket.windowStart = now
+                bucket.count = 0
+            }
+            if (bucket.count >= 30) return false
+            bucket.count++
+            return true
+        }
     }
 
     @Volatile
@@ -709,6 +731,7 @@ class MarumaSignCompanion : JavaPlugin() {
     /** ゲーム中の看板の追加・変更を反映する。author は書いたプレイヤー (プラグインが書き換えたときなどは null) */
     internal fun signChanged(world: World, x: Int, y: Int, z: Int, text: String, orient: Int, author: UUID? = null) {
         val w = worlds[world.name] ?: return
+        if (author != null && !allowAuthorChange(author)) return
         val spec = MarumaSpec.parse(text)
         if (spec == null || spec.url.length > UrlFilter.MAX_URL_LENGTH) {
             signRemoved(world, x, y, z)

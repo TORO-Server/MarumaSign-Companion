@@ -40,7 +40,7 @@ class ShortLinkResolver internal constructor(
 ) {
 
     /** target が null なら調べたが行き先が分からなかった */
-    private data class Entry(val target: String?, val time: Long)
+    private data class Entry(val target: String?, val time: Long, @Volatile var lastSeenAt: Long = time)
 
     /** 1 回の HEAD の結果 (転送先は Location ヘッダー。なければ null) */
     internal data class Reply(val status: Int, val location: String?)
@@ -57,6 +57,11 @@ class ShortLinkResolver internal constructor(
     private val cache = ConcurrentHashMap<String, Entry>()
     private val queue = LinkedHashSet<String>()
     @Volatile
+    private var activeUrls: Set<String> = emptySet()
+    private val capacityLock = Any()
+    private var hourWindowStart = 0L
+    private var hourRequests = 0
+    @Volatile
     private var dirty = false
     @Volatile
     private var stopped = false
@@ -67,6 +72,17 @@ class ShortLinkResolver internal constructor(
 
     fun setHosts(hosts: Set<String>) {
         this.hosts = hosts
+    }
+
+    fun track(urls: Set<String>) {
+        val now = System.currentTimeMillis()
+        val tracked = HashSet<String>()
+        for (u in urls) {
+            if (!isShort(u)) continue
+            tracked.add(u)
+            cache[u]?.let { it.lastSeenAt = now }
+        }
+        activeUrls = tracked
     }
 
     /** 短縮サービスの URL なら true (https の 443 番だけ。サービスのホストは設定で決めたものに限る) */
@@ -108,6 +124,7 @@ class ShortLinkResolver internal constructor(
         if (e != null && (e.target != null || System.currentTimeMillis() - e.time < RETRY_AFTER_MILLIS)) return
         if (!isShort(url)) return
         synchronized(queue) {
+            if (queue.size >= MAX_QUEUE || queue.contains(url)) return
             queue.add(url)
             (queue as java.lang.Object).notifyAll()
         }
@@ -176,6 +193,14 @@ class ShortLinkResolver internal constructor(
                 }
                 val before = cache[url]
                 if (before != null && (before.target != null || System.currentTimeMillis() - before.time < RETRY_AFTER_MILLIS)) continue
+                val waitMillis = acquireHourlySlot(System.currentTimeMillis())
+                if (waitMillis > 0L) {
+                    synchronized(queue) {
+                        if (!stopped && queue.size < MAX_QUEUE) queue.add(url)
+                    }
+                    Thread.sleep(Math.min(waitMillis, 30_000L))
+                    continue
+                }
                 var target: String? = null
                 var backoff = false
                 try {
@@ -186,7 +211,8 @@ class ShortLinkResolver internal constructor(
                     backoff = true
                     log.fine("Could not resolve short link: $e")
                 }
-                cache[url] = Entry(target, System.currentTimeMillis())
+                val now = System.currentTimeMillis()
+                putCache(url, Entry(target, now, now))
                 dirty = true
                 if (target != null) sinceNotify++
                 if (sinceNotify >= 200) {
@@ -267,7 +293,7 @@ class ShortLinkResolver internal constructor(
                     val a = e.value.asJsonArray
                     val target = a.get(0).asString
                     // 読み込んだ行き先も、使う前にもう一度確認する
-                    cache[e.key] = Entry(if (target.isEmpty() || filter.parse(target) == null) null else target, a.get(1).asLong)
+                    putCache(e.key, Entry(if (target.isEmpty() || filter.parse(target) == null) null else target, a.get(1).asLong))
                 }
             }
         } catch (e: Exception) {
@@ -277,9 +303,55 @@ class ShortLinkResolver internal constructor(
         }
     }
 
+    private fun acquireHourlySlot(now: Long): Long {
+        if (hourWindowStart == 0L || now - hourWindowStart >= HOUR_MILLIS) {
+            hourWindowStart = now
+            hourRequests = 1
+            return 0L
+        }
+        if (hourRequests < MAX_REQUESTS_PER_HOUR) {
+            hourRequests++
+            return 0L
+        }
+        return Math.max(1L, hourWindowStart + HOUR_MILLIS - now)
+    }
+
+    private fun putCache(url: String, entry: Entry) {
+        if (cache.size >= MAX_CACHE && !cache.containsKey(url)) {
+            synchronized(capacityLock) {
+                if (cache.size >= MAX_CACHE && !cache.containsKey(url)) {
+                    val active = activeUrls
+                    while (cache.size >= MAX_CACHE) {
+                        var staleVictim: String? = null
+                        var staleOldest = Long.MAX_VALUE
+                        var anyVictim: String? = null
+                        var anyOldest = Long.MAX_VALUE
+                        for ((k, v) in cache) {
+                            if (k !in active && v.lastSeenAt < staleOldest) {
+                                staleOldest = v.lastSeenAt
+                                staleVictim = k
+                            }
+                            if (v.lastSeenAt < anyOldest) {
+                                anyOldest = v.lastSeenAt
+                                anyVictim = k
+                            }
+                        }
+                        val victim = staleVictim ?: anyVictim ?: break
+                        cache.remove(victim)
+                    }
+                }
+            }
+        }
+        cache[url] = entry
+    }
+
     companion object {
         private const val MAX_HOPS = 3
         private const val RETRY_AFTER_MILLIS = 6L * 60 * 60 * 1000
         private const val REQUEST_INTERVAL_MILLIS = 300L
+        private const val MAX_CACHE = 5_000
+        private const val MAX_QUEUE = 5_000
+        private const val MAX_REQUESTS_PER_HOUR = 1_000
+        private const val HOUR_MILLIS = 60L * 60 * 1000
     }
 }

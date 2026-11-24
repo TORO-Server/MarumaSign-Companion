@@ -145,6 +145,42 @@ class SecurityTest {
         assertNull(r.resolved("https://is.gd/failed"))
     }
 
+    @Test
+    fun hostGuardTimesOutSlowDnsLookups(@TempDir dir: Path) {
+        val done = CountDownLatch(1)
+        val guard = HostGuard(LOG, true, { done.countDown() }) { host ->
+            if (host == "hang.example") {
+                try {
+                    Thread.sleep(20_000)
+                } catch (_: InterruptedException) {
+                }
+                arrayOf(ip("93.184.216.34"))
+            } else {
+                arrayOf(ip("93.184.216.34"))
+            }
+        }
+        guard.start()
+        try {
+            assertFalse(guard.isPublic("fast.example"))
+            assertFalse(guard.isPublic("hang.example"))
+            assertTrue(done.await(10, TimeUnit.SECONDS))
+            assertTrue(guard.isPublic("fast.example"))
+            assertFalse(guard.isPublic("hang.example"))
+        } finally {
+            guard.stop()
+        }
+    }
+
+    @Test
+    fun resolverQueueIsBounded(@TempDir dir: Path) {
+        val asked = ArrayList<String>()
+        val r = resolver(dir, emptyMap(), asked)
+        for (i in 0 until 6000) {
+            r.request("https://is.gd/u$i")
+        }
+        assertTrue(r.pending() <= 5000)
+    }
+
     // ---- 3D 表示のデータ ----
 
     private val settings = Settings()

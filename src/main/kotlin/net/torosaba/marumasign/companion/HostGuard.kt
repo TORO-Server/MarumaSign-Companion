@@ -3,6 +3,10 @@ package net.torosaba.marumasign.companion
 import java.net.InetAddress
 import java.net.UnknownHostException
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.logging.Logger
 
@@ -33,6 +37,10 @@ class HostGuard internal constructor(
     private val cache = ConcurrentHashMap<String, Entry>()
     private val queue = LinkedHashSet<String>()
     private val inFlight: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    private val capacityLock = Any()
+    private val dnsExecutor = Executors.newFixedThreadPool(2) { r ->
+        Thread(r, "MarumaSign-HostGuard-DNS").apply { isDaemon = true }
+    }
     private var workers: Array<Thread>? = null
     @Volatile
     private var stopped = false
@@ -96,6 +104,7 @@ class HostGuard internal constructor(
         synchronized(queue) {
             (queue as java.lang.Object).notifyAll()
         }
+        dnsExecutor.shutdownNow()
         workers?.let { for (t in it) t.interrupt() }
         workers = null
     }
@@ -135,7 +144,9 @@ class HostGuard internal constructor(
                 } finally {
                     inFlight.remove(host)
                 }
-                val before = cache.put(host, Entry(pub, System.currentTimeMillis()))
+                val now = System.currentTimeMillis()
+                ensureCacheCapacity(host, now)
+                val before = cache.put(host, Entry(pub, now))
                 if (before == null || before.isPublic != pub) changes.incrementAndGet()
                 synchronized(queue) {
                     (queue as java.lang.Object).notifyAll()
@@ -146,9 +157,37 @@ class HostGuard internal constructor(
         }
     }
 
+    private fun ensureCacheCapacity(incomingHost: String, now: Long) {
+        if (cache.size < MAX_CACHE || cache.containsKey(incomingHost)) return
+        synchronized(capacityLock) {
+            if (cache.size < MAX_CACHE || cache.containsKey(incomingHost)) return
+            cache.entries.removeIf { (_, e) ->
+                val ttl = if (e.isPublic) PUBLIC_TTL_MILLIS else REJECT_TTL_MILLIS
+                now - e.time > ttl
+            }
+            while (cache.size >= MAX_CACHE) {
+                var oldestKey: String? = null
+                var oldestTime = Long.MAX_VALUE
+                for ((k, e) in cache) {
+                    if (e.time < oldestTime) {
+                        oldestTime = e.time
+                        oldestKey = k
+                    }
+                }
+                if (oldestKey == null) break
+                cache.remove(oldestKey)
+            }
+        }
+    }
+
     private fun check(host: String): Boolean {
-        try {
-            val addresses = lookup.lookup(host)
+        val future = try {
+            dnsExecutor.submit<Array<InetAddress>?> { lookup.lookup(host) }
+        } catch (e: RuntimeException) {
+            return false
+        }
+        return try {
+            val addresses = future.get(LOOKUP_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
             if (addresses == null || addresses.isEmpty()) return false
             for (a in addresses) {
                 if (!isPublicAddress(a)) {
@@ -156,11 +195,18 @@ class HostGuard internal constructor(
                     return false
                 }
             }
-            return true
-        } catch (e: UnknownHostException) {
-            return false
+            true
+        } catch (e: TimeoutException) {
+            future.cancel(true)
+            false
+        } catch (e: InterruptedException) {
+            future.cancel(true)
+            Thread.currentThread().interrupt()
+            false
+        } catch (e: ExecutionException) {
+            false
         } catch (e: RuntimeException) {
-            return false
+            false
         }
     }
 
@@ -168,7 +214,9 @@ class HostGuard internal constructor(
         private const val PUBLIC_TTL_MILLIS = 6L * 60 * 60 * 1000
         private const val RECHECK_MILLIS = 30L * 60 * 1000
         private const val REJECT_TTL_MILLIS = 10L * 60 * 1000
+        private const val MAX_CACHE = 10_000
         private const val MAX_QUEUE = 20_000
+        private const val LOOKUP_TIMEOUT_MILLIS = 5_000L
         private const val THREADS = 4
 
         /** インターネット上の公開アドレスなら true ([AddressPolicy]) */
